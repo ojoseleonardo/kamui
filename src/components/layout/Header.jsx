@@ -40,7 +40,7 @@ function Header({ isTerminalOpen, onToggleTerminal }) {
   const unreadCount = 0
 
   return (
-    <header className="flex h-14 shrink-0 items-stretch justify-between border-b border-white/5 bg-kamui-darker/60 pl-6 backdrop-blur-xl drag-region">
+    <header className="relative z-20 flex h-14 shrink-0 items-stretch justify-between border-b border-white/5 bg-kamui-darker/60 pl-6 backdrop-blur-xl drag-region">
       <div className="flex items-center gap-4">
         <h2 className="text-lg font-semibold text-kamui-white">{title}</h2>
       </div>
