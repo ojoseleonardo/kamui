@@ -1,6 +1,6 @@
 import React from 'react'
-import { Upload, HardDrive, Clock, Youtube, TrendingUp, Zap } from 'lucide-react'
-import { Card, CardHeader, CardTitle, CardContent, MetricCard, Badge } from '@/components/ui'
+import { Folder, Upload, HardDrive, Clock, Youtube, TrendingUp, Zap } from 'lucide-react'
+import { Card, CardHeader, CardTitle, CardContent, MetricCard } from '@/components/ui'
 import ActivityChart from '@/components/dashboard/ActivityChart'
 import RecentClips from '@/components/dashboard/RecentClips'
 import StorageWidget from '@/components/dashboard/StorageWidget'
@@ -11,7 +11,10 @@ import { useDashboardSummary } from '@/hooks/useDashboardSummary'
 import { useFolderSummary } from '@/hooks/useFolderSummary'
 import { useYoutubeChannel } from '@/hooks/useYoutubeChannel'
 import { useYoutubeAnalytics } from '@/hooks/useYoutubeAnalytics'
-import { formatBytes, formatNumber } from '@/lib/utils'
+import { cn, formatBytes, formatNumber } from '@/lib/utils'
+
+const youtubeDataPill =
+  'min-w-0 max-w-[min(17rem,70%)] rounded-full border border-white/[0.08] bg-kamui-black/40 px-2.5 py-1 text-xs font-medium text-kamui-white shadow-inner shadow-black/10'
 
 function Home() {
   const { backendReachable, youtubeConnected } = useBackendStatus()
@@ -131,29 +134,96 @@ function Home() {
                 Monitoramento
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between">
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
                 <span className="text-sm text-kamui-white-muted">Monitor</span>
-                <Badge variant={mon.active ? 'success' : 'warning'}>
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                    mon.active
+                      ? 'border-green-500/30 bg-green-500/10 text-green-400'
+                      : 'border-white/[0.08] bg-kamui-black/40 text-kamui-white-muted',
+                  )}
+                  role="status"
+                >
+                  <span
+                    className={cn(
+                      'h-1.5 w-1.5 shrink-0 rounded-full',
+                      mon.active
+                        ? 'animate-pulse bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.55)]'
+                        : 'bg-kamui-gray-light',
+                    )}
+                    aria-hidden
+                  />
                   {mon.active ? 'Ativo' : 'Parado'}
-                </Badge>
+                </span>
               </div>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <span className="text-sm text-kamui-white-muted">YouTube API</span>
-                <Badge variant={youtubeConnected ? 'success' : 'error'}>
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                    youtubeConnected
+                      ? 'border-green-500/30 bg-green-500/10 text-green-400'
+                      : 'border-red-500/25 bg-red-500/10 text-red-400',
+                  )}
+                  role="status"
+                >
+                  <span
+                    className={cn(
+                      'h-1.5 w-1.5 shrink-0 rounded-full',
+                      youtubeConnected
+                        ? 'animate-pulse bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.55)]'
+                        : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.45)]',
+                    )}
+                    aria-hidden
+                  />
                   {youtubeConnected ? 'Conectado' : 'Desconectado'}
-                </Badge>
+                </span>
               </div>
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <span className="text-sm text-kamui-white-muted">Auto-upload</span>
-                <Badge variant={d.auto_upload ? 'primary' : 'default'}>
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                    d.auto_upload
+                      ? 'border-kamui-red/35 bg-kamui-red/10 text-kamui-red-light'
+                      : 'border-white/[0.08] bg-kamui-black/40 text-kamui-white-muted',
+                  )}
+                  role="status"
+                >
+                  <span
+                    className={cn(
+                      'h-1.5 w-1.5 shrink-0 rounded-full',
+                      d.auto_upload
+                        ? 'animate-pulse bg-kamui-red shadow-[0_0_8px_rgba(196,30,58,0.5)]'
+                        : 'bg-kamui-gray-light',
+                    )}
+                    aria-hidden
+                  />
                   {d.auto_upload ? 'Sim' : 'Não'}
-                </Badge>
+                </span>
               </div>
               {mon.watch_folder && (
-                <p className="text-xs text-kamui-white-muted break-all border-t border-white/5 pt-2">
-                  {mon.watch_folder}
-                </p>
+                <div className="border-t border-white/5 pt-3">
+                  <div className="space-y-1.5">
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-kamui-white-muted/70">
+                      Pasta monitorada
+                    </p>
+                    <div
+                      className="flex min-w-0 items-center gap-2 rounded-lg border border-white/[0.08] bg-kamui-black/50 px-2.5 py-2 shadow-inner shadow-black/20"
+                      title={mon.watch_folder}
+                    >
+                      <Folder size={15} className="shrink-0 text-kamui-red/85" aria-hidden />
+                      <span
+                        className="min-w-0 truncate font-mono text-[11px] leading-snug text-kamui-white/90 tracking-tight select-all"
+                        dir="ltr"
+                      >
+                        {mon.watch_folder}
+                      </span>
+                    </div>
+                  </div>
+                </div>
               )}
             </CardContent>
           </Card>
@@ -177,23 +247,26 @@ function Home() {
               )}
               {youtubeConnected && channel.data && (
                 <>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-kamui-white-muted">Canal</span>
-                    <span className="text-sm font-medium text-kamui-white truncate max-w-[60%] text-right">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="shrink-0 text-sm text-kamui-white-muted">Canal</span>
+                    <span
+                      className={cn(youtubeDataPill, 'block truncate text-right')}
+                      title={channel.data.title || undefined}
+                    >
                       {channel.data.title || '—'}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-kamui-white-muted">Inscritos</span>
-                    <span className="text-sm font-medium text-kamui-white">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="shrink-0 text-sm text-kamui-white-muted">Inscritos</span>
+                    <span className={cn(youtubeDataPill, 'inline-block text-right tabular-nums')}>
                       {channel.data.hidden_subscriber_count
                         ? 'Oculto'
                         : formatNumber(channel.data.subscriber_count ?? 0)}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-kamui-white-muted">Views (30 dias)</span>
-                    <span className="text-sm font-medium text-kamui-white">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="shrink-0 text-sm text-kamui-white-muted">Views (30 dias)</span>
+                    <span className={cn(youtubeDataPill, 'inline-block text-right tabular-nums')}>
                       {analytics.loading
                         ? '…'
                         : formatNumber(analytics.data?.views ?? 0)}
@@ -202,17 +275,17 @@ function Home() {
                   {analytics.data?.error && (
                     <p className="text-xs text-amber-400">{analytics.data.error}</p>
                   )}
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-kamui-white-muted">Tempo exibição (30 d)</span>
-                    <span className="text-sm font-medium text-kamui-white">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="shrink-0 text-sm text-kamui-white-muted">Tempo exibição (30 d)</span>
+                    <span className={cn(youtubeDataPill, 'inline-block text-right tabular-nums')}>
                       {analytics.loading
                         ? '…'
                         : `${(analytics.data?.estimated_hours_watched ?? 0).toFixed(1)} h`}
                     </span>
                   </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-kamui-white-muted">Vídeos (canal)</span>
-                    <span className="text-sm font-medium text-kamui-white">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="shrink-0 text-sm text-kamui-white-muted">Vídeos (canal)</span>
+                    <span className={cn(youtubeDataPill, 'inline-block text-right tabular-nums')}>
                       {formatNumber(channel.data.video_count ?? 0)}
                     </span>
                   </div>
