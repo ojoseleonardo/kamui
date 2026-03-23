@@ -1,135 +1,157 @@
 import React, { useState } from 'react'
-import { 
-  Bell, 
-  Terminal as TerminalIcon, 
+import { useLocation, Link } from 'react-router-dom'
+import {
+  Bell,
+  Terminal as TerminalIcon,
   User,
   ChevronDown,
   Settings,
   LogOut,
   Moon,
-  Sun
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, formatDateTime } from '@/lib/utils'
+import WindowControls from './WindowControls'
+import { useEvents } from '@/hooks/useEvents'
+import { useBackendStatus } from '@/context/BackendStatusContext'
+
+const titles = {
+  '/': 'Dashboard',
+  '/youtube': 'YouTube',
+  '/local': 'Clipes locais',
+  '/settings': 'Configurações',
+  '/history': 'Histórico',
+}
 
 function Header({ isTerminalOpen, onToggleTerminal }) {
+  const location = useLocation()
+  const title = titles[location.pathname] || 'Kamui'
+  const { backendReachable } = useBackendStatus()
+  const { events } = useEvents({ limit: 12, enabled: backendReachable })
   const [showProfile, setShowProfile] = useState(false)
-  const [notifications, setNotifications] = useState([
-    { id: 1, text: 'Upload concluído: Epic_Clutch_2024.mp4', time: '2 min atrás', read: false },
-    { id: 2, text: 'Novo clipe detectado na pasta monitorada', time: '15 min atrás', read: false },
-    { id: 3, text: 'Atualização disponível v2.1.0', time: '1 hora atrás', read: true },
-  ])
   const [showNotifications, setShowNotifications] = useState(false)
 
-  const unreadCount = notifications.filter(n => !n.read).length
+  const notifications = events.map((e) => ({
+    id: e.id,
+    text: `${e.title}: ${e.detail || ''}`.trim(),
+    time: formatDateTime(e.created_at),
+    read: true,
+  }))
+
+  const unreadCount = 0
 
   return (
-    <header className="h-14 bg-kamui-darker/60 backdrop-blur-xl border-b border-white/5 flex items-center justify-between px-6 drag-region">
-      {/* Search / Title Area */}
-      <div className="flex items-center gap-4 no-drag">
-        <h2 className="text-lg font-semibold text-kamui-white">
-          Dashboard
-        </h2>
+    <header className="flex h-14 shrink-0 items-stretch justify-between border-b border-white/5 bg-kamui-darker/60 pl-6 backdrop-blur-xl drag-region">
+      <div className="flex items-center gap-4">
+        <h2 className="text-lg font-semibold text-kamui-white">{title}</h2>
       </div>
 
-      {/* Actions */}
-      <div className="flex items-center gap-2 no-drag">
-        {/* Terminal Toggle */}
-        <button
-          onClick={onToggleTerminal}
-          className={cn(
-            'p-2 rounded-lg transition-all duration-300',
-            'hover:bg-white/5 text-kamui-white-muted hover:text-kamui-white',
-            isTerminalOpen && 'bg-kamui-red/20 text-kamui-red'
-          )}
-          title="Toggle Terminal"
-        >
-          <TerminalIcon size={20} />
-        </button>
-
-        {/* Notifications */}
-        <div className="relative">
+      <div className="flex items-stretch">
+        <div className="flex items-center gap-2 border-l border-white/5 px-3 no-drag">
           <button
-            onClick={() => setShowNotifications(!showNotifications)}
+            type="button"
+            onClick={onToggleTerminal}
             className={cn(
               'p-2 rounded-lg transition-all duration-300',
               'hover:bg-white/5 text-kamui-white-muted hover:text-kamui-white',
-              unreadCount > 0 && 'notification-dot'
+              isTerminalOpen && 'bg-kamui-red/20 text-kamui-red',
             )}
-            title="Notificações"
+            title="Terminal"
           >
-            <Bell size={20} />
+            <TerminalIcon size={20} />
           </button>
 
-          {/* Notifications Dropdown */}
-          {showNotifications && (
-            <div className="absolute right-0 top-full mt-2 w-80 glass-card rounded-xl overflow-hidden z-50 animate-fade-in">
-              <div className="p-3 border-b border-white/5">
-                <h3 className="font-semibold text-sm">Notificações</h3>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowNotifications(!showNotifications)}
+              className={cn(
+                'p-2 rounded-lg transition-all duration-300',
+                'hover:bg-white/5 text-kamui-white-muted hover:text-kamui-white',
+                unreadCount > 0 && 'notification-dot',
+              )}
+              title="Atividade recente"
+            >
+              <Bell size={20} />
+            </button>
+
+            {showNotifications && (
+              <div className="absolute right-0 top-full mt-2 w-80 glass-card rounded-xl overflow-hidden z-50 animate-fade-in">
+                <div className="p-3 border-b border-white/5">
+                  <h3 className="font-semibold text-sm">Atividade recente</h3>
+                </div>
+                <div className="max-h-64 overflow-auto">
+                  {!backendReachable && (
+                    <p className="p-3 text-sm text-kamui-white-muted">Backend offline.</p>
+                  )}
+                  {backendReachable && notifications.length === 0 && (
+                    <p className="p-3 text-sm text-kamui-white-muted">Sem eventos recentes.</p>
+                  )}
+                  {notifications.map((notif) => (
+                    <div
+                      key={notif.id}
+                      className="p-3 border-b border-white/5 last:border-0 hover:bg-white/5 transition-colors"
+                    >
+                      <p className="text-sm text-kamui-white line-clamp-2">{notif.text}</p>
+                      <p className="text-xs text-kamui-white-muted mt-1">{notif.time}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="max-h-64 overflow-auto">
-                {notifications.map((notif) => (
-                  <div
-                    key={notif.id}
-                    className={cn(
-                      'p-3 border-b border-white/5 last:border-0 hover:bg-white/5 cursor-pointer transition-colors',
-                      !notif.read && 'bg-kamui-red/5'
-                    )}
+            )}
+          </div>
+
+          <div className="w-px h-6 bg-white/10 mx-2" />
+
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowProfile(!showProfile)}
+              className="flex items-center gap-1.5 rounded-lg p-1.5 transition-colors hover:bg-white/5"
+              title="Conta"
+            >
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-kamui-red to-kamui-red-dark">
+                <User size={16} />
+              </div>
+              <ChevronDown size={16} className="text-kamui-white-muted" />
+            </button>
+
+            {showProfile && (
+              <div className="absolute right-0 top-full mt-2 w-48 glass-card rounded-xl overflow-hidden z-50 animate-fade-in">
+                <div className="p-2">
+                  <Link
+                    to="/settings"
+                    className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors text-left"
+                    onClick={() => setShowProfile(false)}
                   >
-                    <p className="text-sm text-kamui-white">{notif.text}</p>
-                    <p className="text-xs text-kamui-white-muted mt-1">{notif.time}</p>
-                  </div>
-                ))}
+                    <Settings size={16} className="text-kamui-white-muted" />
+                    <span className="text-sm">Configurações</span>
+                  </Link>
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors text-left"
+                  >
+                    <Moon size={16} className="text-kamui-white-muted" />
+                    <span className="text-sm">Tema</span>
+                  </button>
+                  <div className="border-t border-white/5 my-1" />
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-kamui-red/10 transition-colors text-left text-kamui-red"
+                  >
+                    <LogOut size={16} />
+                    <span className="text-sm">Sair</span>
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
-
-        {/* Divider */}
-        <div className="w-px h-6 bg-white/10 mx-2" />
-
-        {/* Profile */}
-        <div className="relative">
-          <button
-            onClick={() => setShowProfile(!showProfile)}
-            className="flex items-center gap-3 p-1.5 rounded-lg hover:bg-white/5 transition-colors"
-          >
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-kamui-red to-kamui-red-dark flex items-center justify-center">
-              <User size={16} />
-            </div>
-            <div className="text-left hidden sm:block">
-              <p className="text-sm font-medium text-kamui-white">Jogador</p>
-              <p className="text-xs text-kamui-white-muted">Pro Account</p>
-            </div>
-            <ChevronDown size={16} className="text-kamui-white-muted" />
-          </button>
-
-          {/* Profile Dropdown */}
-          {showProfile && (
-            <div className="absolute right-0 top-full mt-2 w-48 glass-card rounded-xl overflow-hidden z-50 animate-fade-in">
-              <div className="p-2">
-                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors text-left">
-                  <Settings size={16} className="text-kamui-white-muted" />
-                  <span className="text-sm">Configurações</span>
-                </button>
-                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors text-left">
-                  <Moon size={16} className="text-kamui-white-muted" />
-                  <span className="text-sm">Tema</span>
-                </button>
-                <div className="border-t border-white/5 my-1" />
-                <button className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-kamui-red/10 transition-colors text-left text-kamui-red">
-                  <LogOut size={16} />
-                  <span className="text-sm">Sair</span>
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        <WindowControls />
       </div>
 
-      {/* Click outside handler */}
       {(showNotifications || showProfile) && (
-        <div 
-          className="fixed inset-0 z-40" 
+        <div
+          className="fixed inset-0 z-40"
           onClick={() => {
             setShowNotifications(false)
             setShowProfile(false)

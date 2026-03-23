@@ -6,20 +6,22 @@ import {
   FolderOpen, 
   Settings, 
   History,
-  Zap
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import SharinganIcon from '../ui/SharinganIcon'
+import { useBackendStatus } from '@/context/BackendStatusContext'
 
 const navItems = [
-  { to: '/', icon: Home, label: 'Home' },
-  { to: '/youtube', icon: Youtube, label: 'YouTube' },
-  { to: '/local', icon: FolderOpen, label: 'Local' },
-  { to: '/settings', icon: Settings, label: 'Settings' },
-  { to: '/history', icon: History, label: 'History' },
+  { to: '/', icon: Home, label: 'Home', needsYoutube: false },
+  { to: '/youtube', icon: Youtube, label: 'YouTube', needsYoutube: true },
+  { to: '/local', icon: FolderOpen, label: 'Local', needsYoutube: false },
+  { to: '/settings', icon: Settings, label: 'Configurações', needsYoutube: false },
+  { to: '/history', icon: History, label: 'Histórico', needsYoutube: false },
 ]
 
 function Sidebar() {
+  const { youtubeConnected } = useBackendStatus()
+
   return (
     <aside className="w-64 bg-kamui-darker/80 backdrop-blur-xl border-r border-white/5 flex flex-col">
       {/* Logo */}
@@ -40,46 +42,59 @@ function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 py-4 px-3">
         <ul className="space-y-1">
-          {navItems.map((item) => (
-            <li key={item.to}>
-              <NavLink
-                to={item.to}
-                className={({ isActive }) =>
-                  cn(
-                    'sidebar-link flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-300',
-                    'text-kamui-white-muted hover:text-kamui-white hover:bg-white/5',
-                    isActive && 'active text-kamui-white'
-                  )
-                }
-              >
-                <item.icon size={20} className="flex-shrink-0" />
-                <span className="font-medium">{item.label}</span>
-              </NavLink>
-            </li>
-          ))}
+          {navItems.map((item) => {
+            const disabled = item.needsYoutube && !youtubeConnected
+            return (
+              <li key={item.to}>
+                <NavLink
+                  to={item.to}
+                  aria-disabled={disabled}
+                  tabIndex={disabled ? -1 : undefined}
+                  title={disabled ? 'YouTube desconectado — reconecte em Configurações' : undefined}
+                  className={({ isActive }) =>
+                    cn(
+                      'sidebar-link flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-300',
+                      'text-kamui-white-muted hover:text-kamui-white hover:bg-white/5',
+                      isActive && !disabled && 'active text-kamui-white',
+                      disabled && 'pointer-events-none opacity-40 cursor-not-allowed',
+                    )
+                  }
+                >
+                  <item.icon size={20} className="flex-shrink-0" />
+                  <span className="font-medium">{item.label}</span>
+                </NavLink>
+              </li>
+            )
+          })}
         </ul>
       </nav>
 
       {/* Status Footer */}
       <div className="p-4 border-t border-white/5">
-        <div className="glass-card rounded-lg p-3">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-xs text-kamui-white-muted">Monitoramento Ativo</span>
-          </div>
-          <div className="flex items-center gap-2 text-xs">
-            <Zap size={12} className="text-kamui-red" />
-            <span className="text-kamui-white-muted">3 clipes na fila</span>
+        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <span
+                className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400/90 shadow-[0_0_8px_rgba(52,211,153,0.35)]"
+                aria-hidden
+              />
+              <span className="truncate text-[11px] font-medium tracking-wide text-kamui-white-muted">
+                Kamui
+              </span>
+            </div>
+            <span className="flex shrink-0 items-center gap-1 whitespace-nowrap">
+              <span className="text-sm font-semibold tabular-nums tracking-tight text-kamui-white/90">
+                3
+              </span>
+              <span className="select-none text-kamui-white-muted/20" aria-hidden>
+                ·
+              </span>
+              <span className="text-[9px] font-medium uppercase tracking-[0.14em] text-kamui-white-muted/45">
+                fila
+              </span>
+            </span>
           </div>
         </div>
-      </div>
-
-      {/* Uchiha Crest Watermark */}
-      <div className="absolute bottom-20 left-1/2 -translate-x-1/2 opacity-[0.03] pointer-events-none">
-        <svg width="120" height="140" viewBox="0 0 100 120" fill="currentColor">
-          <path d="M50 10 C20 30 10 70 50 110 C90 70 80 30 50 10 Z" />
-          <circle cx="50" cy="60" r="20" fill="none" stroke="currentColor" strokeWidth="4" />
-        </svg>
       </div>
     </aside>
   )

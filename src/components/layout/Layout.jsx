@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import Sidebar from './Sidebar'
 import Header from './Header'
 import Terminal from './Terminal'
+import YoutubeDisconnectBanner from './YoutubeDisconnectBanner'
 
 function Layout({ children }) {
   const [isTerminalOpen, setIsTerminalOpen] = useState(false)
@@ -24,6 +25,8 @@ function Layout({ children }) {
           isTerminalOpen={isTerminalOpen}
           onToggleTerminal={() => setIsTerminalOpen(!isTerminalOpen)}
         />
+
+        <YoutubeDisconnectBanner />
         
         {/* Content */}
         <main className="flex-1 overflow-auto p-6 relative">

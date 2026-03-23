@@ -1,1 +1,32 @@
 node_modules
+
+# Build (Vite / frontend)
+dist/
+.vite/
+
+# Logs
+logs/
+*.log
+
+# Ambiente e segredos locais
+.env
+.env.local
+.env.*.local
+
+# SO
+.DS_Store
+Thumbs.db
+
+# Backend Python / dados locais
+core/.venv/
+core/.kamui-dev-data/
+core/**/__pycache__/
+*.pyc
+core/credentials/
+core/**/client_secrets.json
+core/**/token.pickle
+core/**/logs/*.log
+
+# Pacotes Electron (se usar electron-builder / similar)
+out/
+release/

@@ -18,9 +18,6 @@ function MetricCard({
       'metric-card glass-card rounded-xl p-5 relative overflow-hidden group',
       className
     )}>
-      {/* Background Gradient */}
-      <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-kamui-red/10 to-transparent rounded-full -translate-y-1/2 translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-      
       <div className="flex items-start justify-between relative z-10">
         <div className="flex-1">
           <p className="text-sm text-kamui-white-muted mb-1">{title}</p>
