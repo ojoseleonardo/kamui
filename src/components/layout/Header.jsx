@@ -29,15 +29,27 @@ function Header({ isTerminalOpen, onToggleTerminal }) {
   const { events } = useEvents({ limit: 12, enabled: backendReachable })
   const [showProfile, setShowProfile] = useState(false)
   const [showNotifications, setShowNotifications] = useState(false)
+  const [dismissedNotificationIds, setDismissedNotificationIds] = useState(() => new Set())
 
-  const notifications = events.map((e) => ({
-    id: e.id,
-    text: `${e.title}: ${e.detail || ''}`.trim(),
-    time: formatDateTime(e.created_at),
-    read: true,
-  }))
+  const notifications = events
+    .filter((e) => !dismissedNotificationIds.has(e.id))
+    .map((e) => ({
+      id: e.id,
+      text: `${e.title}: ${e.detail || ''}`.trim(),
+      time: formatDateTime(e.created_at),
+      read: true,
+    }))
 
   const unreadCount = 0
+
+  const clearNotifications = () => {
+    if (!notifications.length) return
+    setDismissedNotificationIds((prev) => {
+      const next = new Set(prev)
+      for (const n of notifications) next.add(n.id)
+      return next
+    })
+  }
 
   return (
     <header className="relative z-20 flex h-14 shrink-0 items-stretch justify-between border-b border-white/5 bg-kamui-darker/60 pl-6 backdrop-blur-xl drag-region">
@@ -76,8 +88,17 @@ function Header({ isTerminalOpen, onToggleTerminal }) {
 
             {showNotifications && (
               <div className="absolute right-0 top-full mt-2 w-80 glass-card rounded-xl overflow-hidden z-50 animate-fade-in">
-                <div className="p-3 border-b border-white/5">
+                <div className="p-3 border-b border-white/5 flex items-center justify-between gap-2">
                   <h3 className="font-semibold text-sm">Atividade recente</h3>
+                  <button
+                    type="button"
+                    onClick={clearNotifications}
+                    disabled={notifications.length === 0}
+                    className="text-xs px-2 py-1 rounded border border-white/10 text-kamui-white-muted hover:text-kamui-white hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Limpar notificações"
+                  >
+                    Limpar
+                  </button>
                 </div>
                 <div className="max-h-64 overflow-auto">
                   {!backendReachable && (

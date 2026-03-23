@@ -16,7 +16,11 @@ async function resolveBaseUrl() {
 }
 
 export async function apiUrl(path) {
-  const base = await resolveBaseUrl()
+  let base = await resolveBaseUrl()
+  if (base == null || base === '') {
+    base = import.meta.env.VITE_KAMUI_BACKEND_URL || 'http://127.0.0.1:17420'
+  }
+  base = String(base).trim().replace(/\/+$/, '')
   const p = path.startsWith('/') ? path : `/${path}`
   return `${base}${p}`
 }

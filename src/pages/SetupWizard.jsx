@@ -8,6 +8,7 @@ import {
   apiPut,
   selectWatchFolderElectron,
 } from '@/lib/api'
+import { useBackendStatus } from '@/context/BackendStatusContext'
 import { cn } from '@/lib/utils'
 
 const steps = [
@@ -18,6 +19,7 @@ const steps = [
 ]
 
 function SetupWizard({ onComplete }) {
+  const { refresh: refreshYoutubeStatus } = useBackendStatus()
   const [step, setStep] = useState(1)
   const [displayName, setDisplayName] = useState('')
   const [watchFolder, setWatchFolder] = useState('')
@@ -89,7 +91,8 @@ function SetupWizard({ onComplete }) {
     setBusy(true)
     try {
       await apiPost('/auth/youtube')
-      const st = await apiGet('/setup/status')
+      await refreshYoutubeStatus({ probe: true })
+      const st = await apiGet('/setup/status', { probe: true })
       if (!st.youtube_connected) {
         setErr('OAuth concluído, mas a API não respondeu. Tente de novo.')
         return
@@ -97,6 +100,7 @@ function SetupWizard({ onComplete }) {
     } catch (e) {
       setErr(e.message || String(e))
     } finally {
+      await refreshYoutubeStatus({ probe: true })
       setBusy(false)
     }
   }
@@ -106,6 +110,7 @@ function SetupWizard({ onComplete }) {
     setBusy(true)
     try {
       await apiPost('/setup/finalize')
+      await refreshYoutubeStatus({ probe: true })
       onComplete()
     } catch (e) {
       setErr(e.message || String(e))

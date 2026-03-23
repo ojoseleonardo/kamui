@@ -118,11 +118,11 @@ class FileMonitor:
                 return False
 
             file_path.unlink()
-            self.logger.info(f"[DELEÇÃO] Vídeo excluído: {video_path}")
+            self.logger.info(f"[DELEÇÃO] Vídeo apagado permanentemente: {video_path}")
             return True
 
         except Exception as e:
-            self.logger.error(f"Erro ao excluir vídeo {video_path}: {str(e)}")
+            self.logger.error(f"Erro ao apagar vídeo permanentemente {video_path}: {str(e)}")
             return False
 
     def delete_video_by_name(self, video_name: str) -> bool:

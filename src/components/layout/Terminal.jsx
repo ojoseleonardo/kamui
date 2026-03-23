@@ -1,24 +1,51 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useMemo, useState, useEffect, useRef } from 'react'
 import { X, Minimize2, Maximize2, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useEvents } from '@/hooks/useEvents'
+import { apiDelete } from '@/lib/api'
 
-const initialLogs = [
-  { time: '10:23:45', type: 'info', message: '[KAMUI] Sistema iniciado com sucesso' },
-  { time: '10:23:46', type: 'info', message: '[MONITOR] Pasta de clipes configurada: C:/Users/Clips' },
-  { time: '10:23:47', type: 'success', message: '[MONITOR] Monitoramento ativo' },
-  { time: '10:24:12', type: 'info', message: '[DETECTOR] Novo arquivo detectado: clutch_momento.mp4' },
-  { time: '10:24:13', type: 'info', message: '[UPLOAD] Iniciando processamento...' },
-  { time: '10:24:30', type: 'success', message: '[UPLOAD] Thumbnail gerada automaticamente' },
-  { time: '10:25:01', type: 'success', message: '[YOUTUBE] Upload iniciado para YouTube' },
-  { time: '10:26:45', type: 'success', message: '[YOUTUBE] Upload concluído: https://youtu.be/abc123' },
-  { time: '10:26:46', type: 'info', message: '[CLEANUP] Movendo arquivo para pasta processados' },
-  { time: '10:27:00', type: 'warning', message: '[STORAGE] Espaço em disco: 15.2 GB restantes' },
-]
+const typeToVisual = {
+  upload_success: 'success',
+  upload_error: 'error',
+  clip_detected: 'info',
+  file_deleted: 'warning',
+  system: 'info',
+}
+
+function formatEventTime(iso) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '--:--:--'
+  return d.toLocaleTimeString('pt-BR', { hour12: false })
+}
+
+function formatEventMessage(event) {
+  const title = (event.title || '').trim()
+  const detail = (event.detail || '').trim()
+  const err = (event.error || '').trim()
+  if (err) return `[ERRO] ${title || 'Falha'}${detail ? `: ${detail}` : ''} (${err})`
+  if (title && detail) return `[${event.type || 'EVENT'}] ${title}: ${detail}`
+  if (title) return `[${event.type || 'EVENT'}] ${title}`
+  if (detail) return `[${event.type || 'EVENT'}] ${detail}`
+  return `[${event.type || 'EVENT'}] Evento registado`
+}
 
 function Terminal({ isOpen, onClose }) {
-  const [logs, setLogs] = useState(initialLogs)
+  const { events, loading, refresh } = useEvents({ limit: 200, enabled: true })
+  const [clearBusy, setClearBusy] = useState(false)
   const [isMaximized, setIsMaximized] = useState(false)
   const terminalRef = useRef(null)
+
+  const logs = useMemo(() => {
+    return (events || [])
+      .slice()
+      .reverse()
+      .map((event) => ({
+        id: event.id,
+        time: formatEventTime(event.created_at),
+        type: typeToVisual[event.type] || 'info',
+        message: formatEventMessage(event),
+      }))
+  }, [events])
 
   useEffect(() => {
     if (terminalRef.current) {
@@ -26,26 +53,13 @@ function Terminal({ isOpen, onClose }) {
     }
   }, [logs])
 
-  // Simulate new logs
   useEffect(() => {
     if (!isOpen) return
-    
-    const messages = [
-      { type: 'info', message: '[MONITOR] Verificando pasta de clipes...' },
-      { type: 'info', message: '[SYSTEM] Heartbeat check - OK' },
-      { type: 'success', message: '[API] Conexão com YouTube API estável' },
-    ]
-    
-    const interval = setInterval(() => {
-      const randomMsg = messages[Math.floor(Math.random() * messages.length)]
-      const now = new Date()
-      const time = now.toLocaleTimeString('pt-BR', { hour12: false })
-      
-      setLogs(prev => [...prev.slice(-50), { ...randomMsg, time }])
-    }, 5000)
+    refresh()
+    const interval = setInterval(refresh, 5000)
 
     return () => clearInterval(interval)
-  }, [isOpen])
+  }, [isOpen, refresh])
 
   const getLogColor = (type) => {
     switch (type) {
@@ -56,7 +70,16 @@ function Terminal({ isOpen, onClose }) {
     }
   }
 
-  const clearLogs = () => setLogs([])
+  const clearLogs = async () => {
+    if (clearBusy) return
+    setClearBusy(true)
+    try {
+      await apiDelete('/events')
+      await refresh()
+    } finally {
+      setClearBusy(false)
+    }
+  }
 
   if (!isOpen) return null
 
@@ -82,6 +105,7 @@ function Terminal({ isOpen, onClose }) {
             onClick={clearLogs}
             className="p-1.5 hover:bg-white/10 rounded transition-colors"
             title="Limpar logs"
+            disabled={clearBusy}
           >
             <Trash2 size={14} className="text-kamui-white-muted" />
           </button>
@@ -111,14 +135,17 @@ function Terminal({ isOpen, onClose }) {
         ref={terminalRef}
         className="h-full overflow-auto p-4 font-mono text-xs leading-relaxed"
       >
-        {logs.map((log, index) => (
-          <div key={index} className="flex gap-2 hover:bg-white/5 px-1 -mx-1 rounded">
+        {logs.map((log) => (
+          <div key={log.id} className="flex gap-2 hover:bg-white/5 px-1 -mx-1 rounded">
             <span className="text-kamui-gray-light shrink-0">[{log.time}]</span>
             <span className={cn('break-all', getLogColor(log.type))}>
               {log.message}
             </span>
           </div>
         ))}
+        {!loading && logs.length === 0 && (
+          <div className="text-kamui-white-muted">Nenhum evento recente.</div>
+        )}
         <div className="flex items-center gap-2 mt-2">
           <span className="text-green-400">❯</span>
           <span className="w-2 h-4 bg-green-400 animate-pulse" />

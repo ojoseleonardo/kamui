@@ -12,7 +12,7 @@ import {
   ExternalLink,
   Download,
 } from 'lucide-react'
-import { Card, CardHeader, CardTitle, CardContent, Button, Badge } from '@/components/ui'
+import { Card, CardHeader, CardTitle, CardContent, Button, Badge, ConfirmModal } from '@/components/ui'
 import { formatBytes, formatDateTime } from '@/lib/utils'
 import { apiDelete } from '@/lib/api'
 import { useEvents, useEventsStats } from '@/hooks/useEvents'
@@ -62,6 +62,8 @@ function History() {
   const [filterType, setFilterType] = useState('all')
   const [dateRange, setDateRange] = useState('all')
   const [clearBusy, setClearBusy] = useState(false)
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
+  const [clearError, setClearError] = useState(null)
 
   const filteredItems = useMemo(() => {
     return events.filter((item) => {
@@ -114,14 +116,14 @@ function History() {
   }
 
   const clearAll = async () => {
-    if (!window.confirm('Apagar todo o histórico de eventos?')) return
+    setClearConfirmOpen(false)
     setClearBusy(true)
     try {
       await apiDelete('/events')
       await refresh()
       await refreshStats()
     } catch (e) {
-      window.alert(e.message || String(e))
+      setClearError(e.message || String(e))
     } finally {
       setClearBusy(false)
     }
@@ -129,6 +131,33 @@ function History() {
 
   return (
     <div className="space-y-6">
+      <ConfirmModal
+        open={clearConfirmOpen}
+        titleId="history-clear-title"
+        title="Apagar todo o histórico?"
+        confirmLabel="Apagar tudo"
+        cancelLabel="Cancelar"
+        confirmVariant="danger"
+        busy={clearBusy}
+        onClose={() => !clearBusy && setClearConfirmOpen(false)}
+        onConfirm={clearAll}
+      >
+        <p className="text-kamui-white/90">Todos os eventos registados serão removidos. Esta ação não pode ser desfeita.</p>
+      </ConfirmModal>
+
+      <ConfirmModal
+        open={clearError != null}
+        titleId="history-clear-error-title"
+        title="Erro ao limpar histórico"
+        confirmLabel="OK"
+        cancelLabel={null}
+        confirmVariant="primary"
+        onClose={() => setClearError(null)}
+        onConfirm={() => setClearError(null)}
+      >
+        <p className="text-kamui-white/90">{clearError}</p>
+      </ConfirmModal>
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-kamui-white flex items-center gap-3">
@@ -146,7 +175,7 @@ function History() {
             variant="danger"
             size="sm"
             type="button"
-            onClick={clearAll}
+            onClick={() => setClearConfirmOpen(true)}
             disabled={clearBusy}
             loading={clearBusy}
           >

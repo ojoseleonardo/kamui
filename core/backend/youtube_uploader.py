@@ -14,12 +14,21 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
 from .logger_config import LoggerConfig
+from .youtube_rate_limit import acquire_google_youtube_slot
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
     "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
+
+# Sem isso o Google reutiliza a conta já logada no browser e o token não troca de conta.
+_OAUTH_AUTH_KWARGS = {
+    "access_type": "offline",
+    "prompt": "select_account consent",
+    "include_granted_scopes": "true",
+}
 
 
 def perform_youtube_oauth(credentials_file: Path, token_file: Path) -> tuple:
@@ -29,7 +38,7 @@ def perform_youtube_oauth(credentials_file: Path, token_file: Path) -> tuple:
         return False, "Arquivo client_secrets.json não encontrado."
     try:
         flow = InstalledAppFlow.from_client_secrets_file(str(credentials_file), SCOPES)
-        creds = flow.run_local_server(port=0)
+        creds = flow.run_local_server(port=0, **_OAUTH_AUTH_KWARGS)
         token_file.parent.mkdir(parents=True, exist_ok=True)
         with open(token_file, "wb") as token:
             pickle.dump(creds, token)
@@ -94,7 +103,7 @@ class YouTubeUploader:
                     flow = InstalledAppFlow.from_client_secrets_file(
                         str(self.credentials_file), SCOPES
                     )
-                    creds = flow.run_local_server(port=0)
+                    creds = flow.run_local_server(port=0, **_OAUTH_AUTH_KWARGS)
                     self.logger.info("Autenticação OAuth2 concluída")
                 except Exception as e:
                     self.logger.error(f"Erro na autenticação OAuth2: {str(e)}")
@@ -120,6 +129,7 @@ class YouTubeUploader:
         if not self.youtube_service:
             return False, "YouTube não está autenticado."
         try:
+            acquire_google_youtube_slot()
             self.youtube_service.channels().list(part="snippet", mine=True, maxResults=1).execute()
             return True, ""
         except Exception as e:
@@ -169,6 +179,30 @@ class YouTubeUploader:
             return [str(item.get("reason", "")) for item in errs if isinstance(item, dict)]
         except (json.JSONDecodeError, TypeError, AttributeError):
             return []
+
+    @staticmethod
+    def _google_api_user_message(exc: BaseException) -> str:
+        """Mensagem legível para o cliente (PT) a partir de HttpError da Data API."""
+        if not isinstance(exc, HttpError):
+            return str(exc)
+        reasons = YouTubeUploader._youtube_error_reasons(exc)
+        msg = str(exc)
+        try:
+            payload = json.loads(exc.content.decode("utf-8", errors="replace"))
+            msg = payload.get("error", {}).get("message") or msg
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            pass
+        if "notFound" in reasons:
+            return (
+                "O YouTube não encontrou este vídeo (pode já ter sido apagado). "
+                "Se a lista estiver desatualizada, atualize a página."
+            )
+        if "insufficientPermissions" in reasons or "forbidden" in reasons:
+            return (
+                "Sem permissão para esta operação. Em Configurações, use "
+                "«Conectar ou renovar conta do YouTube» para aceitar todas as permissões (incl. editar/apagar)."
+            )
+        return msg
 
     def upload_video(
         self,
@@ -275,6 +309,7 @@ class YouTubeUploader:
             request = self.youtube_service.videos().list(
                 part="snippet,status,statistics", id=youtube_video_id
             )
+            acquire_google_youtube_slot()
             response = request.execute()
 
             if response["items"]:
@@ -284,3 +319,71 @@ class YouTubeUploader:
         except Exception as e:
             self.logger.error(f"Erro ao obter informações do vídeo: {str(e)}")
             return None
+
+    def update_video(
+        self,
+        youtube_video_id: str,
+        *,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        privacy_status: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+    ) -> tuple[bool, str]:
+        """Atualiza snippet/status (Data API videos.update). Requer youtube.force-ssl."""
+        if not self.youtube_service:
+            return False, "YouTube não está autenticado."
+        vid = str(youtube_video_id or "").strip()
+        if not vid:
+            return False, "ID inválido."
+        info = self.get_video_info(vid)
+        if not info:
+            return False, "Vídeo não encontrado."
+        sn = dict(info.get("snippet") or {})
+        st = dict(info.get("status") or {})
+        if title is not None:
+            sn["title"] = title
+        if description is not None:
+            sn["description"] = description
+        if tags is not None:
+            clean = [t.strip() for t in tags if t and str(t).strip()][:30]
+            sn["tags"] = clean
+        if privacy_status is not None:
+            ps = str(privacy_status).strip().lower()
+            if ps not in ("public", "unlisted", "private"):
+                return False, "Privacidade inválida (use public, unlisted ou private)."
+            st["privacyStatus"] = ps
+        if "categoryId" not in sn or not sn.get("categoryId"):
+            sn["categoryId"] = "22"
+        body = {"id": vid, "snippet": sn, "status": st}
+        try:
+            acquire_google_youtube_slot()
+            self.youtube_service.videos().update(part="snippet,status", body=body).execute()
+            self.logger.info("Vídeo atualizado no YouTube: %s", vid)
+            return True, ""
+        except HttpError as e:
+            msg = self._google_api_user_message(e)
+            self.logger.warning("Falha ao atualizar vídeo %s: %s", vid, msg)
+            return False, msg
+        except Exception as e:
+            self.logger.error("Erro ao atualizar vídeo %s: %s", vid, e)
+            return False, str(e)
+
+    def delete_video(self, youtube_video_id: str) -> tuple[bool, str]:
+        """Apaga vídeo no canal (requer scope youtube.force-ssl). Retorna (ok, mensagem)."""
+        if not self.youtube_service:
+            return False, "YouTube não está autenticado."
+        if not youtube_video_id or not str(youtube_video_id).strip():
+            return False, "ID inválido."
+        vid = str(youtube_video_id).strip()
+        try:
+            acquire_google_youtube_slot()
+            self.youtube_service.videos().delete(id=vid).execute()
+            self.logger.info("Vídeo removido do YouTube: %s", vid)
+            return True, ""
+        except HttpError as e:
+            msg = self._google_api_user_message(e)
+            self.logger.warning("Falha ao apagar vídeo %s: %s", vid, msg)
+            return False, msg
+        except Exception as e:
+            self.logger.error("Erro ao apagar vídeo %s: %s", vid, e)
+            return False, str(e)

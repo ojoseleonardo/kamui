@@ -9,26 +9,39 @@ import {
   ChevronRight,
   ExternalLink,
 } from 'lucide-react'
-import { Card, CardHeader, CardTitle, CardContent, Button, Badge } from '@/components/ui'
+import { Card, CardHeader, CardTitle, CardContent, Button, Badge, ConfirmModal } from '@/components/ui'
 import { useBackendStatus } from '@/context/BackendStatusContext'
 import { apiGet, apiPost, apiPut, selectWatchFolderElectron } from '@/lib/api'
 import { formatBytes } from '@/lib/utils'
 import { useFolderSummary } from '@/hooks/useFolderSummary'
 import KamuiLoader from '@/components/ui/KamuiLoader'
 
-function YoutubeAccountPanel({ settings, updateSetting }) {
+function YoutubeAccountPanel({ settings, updateSetting, showError }) {
   const { youtubeConnected, youtubeMessage, refresh } = useBackendStatus()
   const [busy, setBusy] = useState(false)
+  const [disconnectBusy, setDisconnectBusy] = useState(false)
 
   const reconnect = async () => {
     setBusy(true)
     try {
       await apiPost('/auth/youtube')
-      await refresh()
     } catch (e) {
-      window.alert(e.message || String(e))
+      showError(e.message || String(e), 'YouTube')
     } finally {
+      await refresh({ probe: true })
       setBusy(false)
+    }
+  }
+
+  const disconnect = async () => {
+    setDisconnectBusy(true)
+    try {
+      await apiPost('/auth/youtube/disconnect')
+    } catch (e) {
+      showError(e.message || String(e), 'YouTube')
+    } finally {
+      await refresh({ probe: true })
+      setDisconnectBusy(false)
     }
   }
 
@@ -54,11 +67,27 @@ function YoutubeAccountPanel({ settings, updateSetting }) {
         className="w-full"
         type="button"
         onClick={reconnect}
-        disabled={busy}
+        disabled={busy || disconnectBusy}
         loading={busy}
       >
         Conectar ou renovar conta do YouTube (OAuth)
       </Button>
+
+      <Button
+        variant="outline"
+        className="w-full"
+        type="button"
+        onClick={disconnect}
+        disabled={busy || disconnectBusy}
+        loading={disconnectBusy}
+      >
+        Desconectar conta (apagar sessão local)
+      </Button>
+      <p className="text-xs text-kamui-white-muted">
+        Ao reconectar, o navegador deve pedir qual conta Google usar. Se continuar na conta antiga,
+        use &quot;Desconectar&quot; e depois &quot;Conectar&quot;, ou abra o link do Google numa
+        janela anónima.
+      </p>
 
       <div className="space-y-2">
         <label className="font-medium text-kamui-white">Privacidade padrão</label>
@@ -107,7 +136,7 @@ function YoutubeAccountPanel({ settings, updateSetting }) {
   )
 }
 
-function StorageSection({ settings, updateSetting }) {
+function StorageSection({ settings, updateSetting, showError }) {
   const { backendReachable } = useBackendStatus()
   const { data, error, loading, refresh } = useFolderSummary(backendReachable)
 
@@ -119,7 +148,7 @@ function StorageSection({ settings, updateSetting }) {
       updateSetting('monitorPath', p)
       await refresh()
     } catch (e) {
-      window.alert(e.message || String(e))
+      showError(e.message || String(e), 'Pasta monitorada')
     }
   }
 
@@ -195,6 +224,11 @@ function Settings() {
     setSettings((prev) => ({ ...prev, [key]: value }))
   }, [])
 
+  const [notice, setNotice] = useState(null)
+  const showError = useCallback((body, title = 'Erro') => {
+    setNotice({ title, body })
+  }, [])
+
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -251,7 +285,7 @@ function Settings() {
       if (setup.watch_folder === cur) return
       await apiPut('/setup/folder', { watch_folder: cur })
     } catch (e) {
-      window.alert(`Pasta: ${e.message || e}`)
+      showError(e.message || String(e), 'Pasta')
     }
   }
 
@@ -273,7 +307,7 @@ function Settings() {
       })
       await apiPost('/settings/reload')
     } catch (e) {
-      window.alert(e.message || String(e))
+      showError(e.message || String(e))
     } finally {
       setSaveBusy(false)
     }
@@ -298,7 +332,7 @@ function Settings() {
           </div>
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium text-kamui-white">Eliminar após upload</p>
+              <p className="font-medium text-kamui-white">Excluir após upload</p>
               <p className="text-sm text-kamui-white-muted">Ainda não aplicado no backend</p>
             </div>
             <ToggleSwitch
@@ -345,13 +379,13 @@ function Settings() {
       id: 'youtube',
       title: 'YouTube',
       icon: Youtube,
-      content: <YoutubeAccountPanel settings={settings} updateSetting={updateSetting} />,
+      content: <YoutubeAccountPanel settings={settings} updateSetting={updateSetting} showError={showError} />,
     },
     {
       id: 'storage',
       title: 'Armazenamento',
       icon: Database,
-      content: <StorageSection settings={settings} updateSetting={updateSetting} />,
+      content: <StorageSection settings={settings} updateSetting={updateSetting} showError={showError} />,
     },
   ]
 
@@ -367,6 +401,19 @@ function Settings() {
 
   return (
     <div className="space-y-6">
+      <ConfirmModal
+        open={notice != null}
+        titleId="settings-notice-title"
+        title={notice?.title ?? ''}
+        confirmLabel="OK"
+        cancelLabel={null}
+        confirmVariant="primary"
+        onClose={() => setNotice(null)}
+        onConfirm={() => setNotice(null)}
+      >
+        <p className="text-kamui-white/90">{notice?.body}</p>
+      </ConfirmModal>
+
       <div>
         <h1 className="text-2xl font-bold text-kamui-white flex items-center gap-3">
           <SettingsIcon size={28} className="text-kamui-red" />

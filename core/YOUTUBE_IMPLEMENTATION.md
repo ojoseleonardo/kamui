@@ -4,7 +4,7 @@ Este documento descreve em detalhes como funciona a implementação do sistema d
 
 ## Visão Geral
 
-A implementação utiliza a **API do YouTube Data v3** para upload e leitura de canal/vídeos. Para métricas por período (views, tempo de exibição) o backend usa também a **YouTube Analytics API** (`yt-analytics.readonly`) — ative a API no Google Cloud e faça **novo OAuth** quando os scopes mudarem.
+A implementação utiliza a **API do YouTube Data v3** para upload e leitura de canal/vídeos, e para **eliminar vídeos** (`videos.delete`) via scope `youtube.force-ssl`. Para métricas por período (views, tempo de exibição) o backend usa também a **YouTube Analytics API** (`yt-analytics.readonly`) — ative a API no Google Cloud e faça **novo OAuth** quando os scopes mudarem (incluindo após adicionar `youtube.force-ssl`).
 
 O sistema é composto por três componentes principais:
 

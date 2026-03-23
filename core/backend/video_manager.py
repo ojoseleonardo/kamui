@@ -3,6 +3,7 @@ Gerenciador principal: FileMonitor + YouTubeUploader.
 """
 
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -43,12 +44,41 @@ class VideoManager:
 
         self._init_youtube()
 
+    @staticmethod
+    def _parse_event_created_at(created_at: str) -> Optional[datetime]:
+        try:
+            s = created_at.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except (ValueError, TypeError):
+            return None
+
     def _hydrate_uploaded_from_db(self):
-        for p in db.list_upload_success_paths():
+        for path, created_at in db.list_latest_upload_success_with_created():
+            upload_dt = self._parse_event_created_at(created_at)
+            if upload_dt is None:
+                continue
+            p = Path(path)
+            if not p.is_file():
+                continue
             try:
-                self.uploaded_videos.add(str(Path(p).resolve()))
+                resolved = str(p.resolve())
+                mtime_dt = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)
             except OSError:
-                self.uploaded_videos.add(p)
+                continue
+            if mtime_dt > upload_dt:
+                continue
+            self.uploaded_videos.add(resolved)
+
+    def _remove_local_after_upload(self, file_path: str, resolved: str) -> None:
+        if self.file_monitor.delete_video(file_path):
+            self.uploaded_videos.discard(resolved)
+        else:
+            self.logger.error(
+                f"[UPLOAD] Vídeo enviado ao YouTube, mas falhou ao apagar o ficheiro local: {file_path}"
+            )
 
     def _prefs(self) -> Dict[str, Any]:
         return db.get_preferences()
@@ -164,6 +194,7 @@ class VideoManager:
                     youtube_id=youtube_video_id,
                     file_size=metadata.get("size"),
                 )
+                self._remove_local_after_upload(file_path, resolved)
             else:
                 self.logger.error(f"[UPLOAD] Falhou: {file_path}")
                 db.insert_event(
@@ -229,6 +260,48 @@ class VideoManager:
 
         self.logger.info("[SISTEMA] Gerenciador parado")
 
+    def queue_status(self) -> Dict[str, Any]:
+        """Estimativa da fila de upload (itens pendentes + em envio)."""
+        with self._upload_lock:
+            in_flight = set(self._uploads_in_flight)
+            uploaded = set(self.uploaded_videos)
+
+        in_flight_count = len(in_flight)
+        can_auto_upload = (
+            self.running
+            and self.auto_upload
+            and self.youtube_uploader is not None
+            and self.youtube_uploader.youtube_service is not None
+        )
+        if not can_auto_upload:
+            return {
+                "in_flight": in_flight_count,
+                "pending": 0,
+                "total": in_flight_count,
+            }
+
+        pending = 0
+        try:
+            for video in self.file_monitor.list_videos(recursive=True):
+                raw_path = str(video.get("path") or "").strip()
+                if not raw_path:
+                    continue
+                try:
+                    key = str(Path(raw_path).resolve())
+                except OSError:
+                    key = raw_path
+                if key in uploaded or key in in_flight:
+                    continue
+                pending += 1
+        except Exception as e:
+            self.logger.warning(f"Falha ao calcular fila de upload: {str(e)}")
+
+        return {
+            "in_flight": in_flight_count,
+            "pending": pending,
+            "total": pending + in_flight_count,
+        }
+
     def upload_video_manually(
         self,
         file_path: str,
@@ -289,6 +362,7 @@ class VideoManager:
                     youtube_id=youtube_video_id,
                     file_size=metadata.get("size"),
                 )
+                self._remove_local_after_upload(file_path, resolved)
                 return youtube_video_id
 
             db.insert_event(

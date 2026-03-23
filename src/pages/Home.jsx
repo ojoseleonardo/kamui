@@ -1,5 +1,5 @@
 import React from 'react'
-import { Folder, Upload, HardDrive, Clock, Youtube, TrendingUp, Zap } from 'lucide-react'
+import { Folder, Upload, HardDrive, Youtube, TrendingUp, Zap } from 'lucide-react'
 import { Card, CardHeader, CardTitle, CardContent, MetricCard } from '@/components/ui'
 import ActivityChart from '@/components/dashboard/ActivityChart'
 import RecentClips from '@/components/dashboard/RecentClips'
@@ -89,10 +89,10 @@ function Home() {
           icon={HardDrive}
         />
         <MetricCard
-          title="Clipes pendentes"
-          value={formatNumber(d.pending_clips ?? 0)}
-          subtitle="Ficheiros ainda não enviados"
-          icon={Clock}
+          title="Clipes na pasta"
+          value={formatNumber(d.local_clips ?? 0)}
+          subtitle="Arquivos na pasta monitorada neste momento"
+          icon={Folder}
         />
       </div>
 

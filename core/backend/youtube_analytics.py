@@ -5,6 +5,8 @@ from typing import Any, Dict
 from google.auth.credentials import Credentials
 from googleapiclient.discovery import build
 
+from .youtube_rate_limit import acquire_google_youtube_slot
+
 
 def fetch_channel_analytics(
     credentials: Credentials,
@@ -17,6 +19,7 @@ def fetch_channel_analytics(
     """
     try:
         ya = build("youtubeAnalytics", "v2", credentials=credentials)
+        acquire_google_youtube_slot()
         resp = (
             ya.reports()
             .query(
@@ -60,6 +63,7 @@ def fetch_daily_views_series(
     """Série diária: day, views (para gráficos)."""
     try:
         ya = build("youtubeAnalytics", "v2", credentials=credentials)
+        acquire_google_youtube_slot()
         resp = (
             ya.reports()
             .query(

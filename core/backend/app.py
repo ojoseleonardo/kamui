@@ -8,6 +8,7 @@ import asyncio
 import json
 import shutil
 import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
@@ -15,6 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from . import db
@@ -27,7 +29,13 @@ from .paths import (
 )
 from .video_manager import VideoManager
 from .youtube_analytics import fetch_channel_analytics, fetch_daily_views_series
-from .youtube_read import fetch_channel_summary, fetch_my_uploads_page
+from .video_thumbnail import extract_thumbnail_jpeg, resolve_watch_video_path
+from .youtube_read import (
+    clear_mine_uploads_playlist_cache,
+    fetch_channel_summary,
+    fetch_my_uploads_page,
+    fetch_video_by_id,
+)
 from .youtube_uploader import YouTubeUploader, perform_youtube_oauth
 
 
@@ -86,9 +94,13 @@ class MonitorController:
         with self._lock:
             running = self._manager is not None and self._manager.running
             folder = db.get_setting("watch_folder") or ""
+            queue = {"in_flight": 0, "pending": 0, "total": 0}
+            if self._manager is not None:
+                queue = self._manager.queue_status()
             return {
                 "active": running,
                 "watch_folder": folder,
+                "queue": queue,
             }
 
     def reload_youtube(self):
@@ -135,6 +147,29 @@ def _folder_monitor() -> Optional[FileMonitor]:
     return FileMonitor(str(p.resolve()))
 
 
+_youtube_status_cache: Dict[str, Any] = {"t": 0.0, "payload": None}
+
+
+def _invalidate_youtube_status_cache() -> None:
+    _youtube_status_cache["t"] = 0.0
+    _youtube_status_cache["payload"] = None
+
+
+def _invalidate_youtube_api_caches() -> None:
+    """Após novo OAuth ou troca de conta — não reutilizar estado antigo."""
+    _invalidate_youtube_status_cache()
+    clear_mine_uploads_playlist_cache()
+
+
+def _youtube_status_cache_ttl_seconds(payload: Dict[str, Any]) -> float:
+    if payload.get("connected"):
+        return 6 * 3600
+    msg = (payload.get("message") or "").lower()
+    if "quota" in msg:
+        return 3600
+    return 900
+
+
 def _uploader_or_400() -> YouTubeUploader:
     c = client_secrets_path()
     t = token_path()
@@ -152,8 +187,21 @@ def _youtube_status() -> Dict[str, Any]:
     if not c.exists():
         return {"connected": False, "message": "Falta o arquivo client_secrets.json."}
     up = YouTubeUploader(str(c), str(t), defer_interactive=True)
+    if not up.youtube_service:
+        return {"connected": False, "message": "YouTube não está autenticado."}
+
+    now = time.monotonic()
+    cached = _youtube_status_cache["payload"]
+    if cached is not None and now - _youtube_status_cache["t"] < _youtube_status_cache_ttl_seconds(
+        cached
+    ):
+        return cached
+
     ok, msg = up.verify_connection()
-    return {"connected": ok, "message": msg or ""}
+    payload: Dict[str, Any] = {"connected": ok, "message": msg or ""}
+    _youtube_status_cache["t"] = now
+    _youtube_status_cache["payload"] = payload
+    return payload
 
 
 def _setup_missing() -> List[str]:
@@ -201,7 +249,9 @@ def health():
 
 
 @app.get("/setup/status")
-def setup_status():
+def setup_status(probe: bool = False):
+    if probe:
+        _invalidate_youtube_status_cache()
     complete = db.is_setup_complete()
     missing = [] if complete else _setup_missing()
     yt = _youtube_status()
@@ -276,7 +326,27 @@ async def auth_youtube():
         raise HTTPException(status_code=400, detail=err or "OAuth falhou.")
 
     controller.reload_youtube()
+    _invalidate_youtube_api_caches()
     return {"ok": True}
+
+
+@app.post("/auth/youtube/disconnect")
+def auth_youtube_disconnect():
+    """Remove token OAuth local; próximo uso exige novo login (troca de conta)."""
+    t = token_path()
+    removed = False
+    if t.exists():
+        try:
+            t.unlink()
+            removed = True
+        except OSError as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Não foi possível apagar o token: {e}",
+            )
+    controller.reload_youtube()
+    _invalidate_youtube_api_caches()
+    return {"ok": True, "removed": removed}
 
 
 @app.post("/setup/finalize")
@@ -300,7 +370,9 @@ async def setup_finalize():
 
 
 @app.get("/youtube/status")
-def youtube_status():
+def youtube_status(probe: bool = False):
+    if probe:
+        _invalidate_youtube_status_cache()
     return _youtube_status()
 
 
@@ -375,20 +447,47 @@ def folder_videos():
     m = _folder_monitor()
     if not m:
         raise HTTPException(status_code=400, detail="Pasta monitorada inválida ou não configurada.")
-    uploaded = set()
-    for p in db.list_upload_success_paths():
-        try:
-            uploaded.add(str(Path(p).resolve()))
-        except OSError:
-            uploaded.add(p)
-    out = []
-    for v in m.list_videos(recursive=True):
-        try:
-            key = str(Path(v["path"]).resolve())
-        except OSError:
-            key = v["path"]
-        out.append({**v, "uploaded": key in uploaded})
-    return {"videos": out}
+    return {"videos": m.list_videos(recursive=True)}
+
+
+@app.get("/folder/video/thumbnail")
+def folder_video_thumbnail(path: str = Query(..., min_length=1, description="Caminho absoluto do vídeo")):
+    p = resolve_watch_video_path(path)
+    if not p:
+        raise HTTPException(status_code=404, detail="Vídeo não encontrado ou fora da pasta monitorada.")
+    data = extract_thumbnail_jpeg(str(p))
+    if not data:
+        raise HTTPException(
+            status_code=422, detail="Não foi possível gerar miniatura (codec ou ficheiro inválido)."
+        )
+    return Response(content=data, media_type="image/jpeg")
+
+
+class FolderVideosDeleteBody(BaseModel):
+    paths: List[str] = Field(..., min_length=1)
+
+
+@app.post("/folder/videos/delete")
+def folder_videos_delete(body: FolderVideosDeleteBody):
+    m = _folder_monitor()
+    if not m:
+        raise HTTPException(status_code=400, detail="Pasta monitorada inválida ou não configurada.")
+    deleted = 0
+    errors: List[Dict[str, str]] = []
+    for raw in body.paths:
+        s = (raw or "").strip()
+        if not s:
+            errors.append({"path": raw or "", "detail": "Caminho vazio."})
+            continue
+        p = resolve_watch_video_path(s)
+        if not p:
+            errors.append({"path": s, "detail": "Caminho inválido ou fora da pasta monitorada."})
+            continue
+        if m.delete_video(str(p)):
+            deleted += 1
+        else:
+            errors.append({"path": s, "detail": "Não foi possível apagar o ficheiro permanentemente."})
+    return {"deleted": deleted, "errors": errors}
 
 
 # --- Eventos / histórico ---
@@ -434,23 +533,10 @@ def events_delete():
 @app.get("/dashboard/summary")
 def dashboard_summary():
     prefs = db.get_preferences()
-    uploaded_norm = set()
-    for p in db.list_upload_success_paths():
-        try:
-            uploaded_norm.add(str(Path(p).resolve()))
-        except OSError:
-            uploaded_norm.add(p)
-
-    pending = 0
+    local_clips = 0
     m = _folder_monitor()
     if m:
-        for v in m.list_videos(recursive=True):
-            try:
-                key = str(Path(v["path"]).resolve())
-            except OSError:
-                key = v["path"]
-            if key not in uploaded_norm:
-                pending += 1
+        local_clips = len(m.list_videos(recursive=True))
 
     uploads_7 = db.uploads_per_day(7)
     yt = _youtube_status()
@@ -486,7 +572,7 @@ def dashboard_summary():
 
     return {
         "total_uploads": db.count_upload_success(),
-        "pending_clips": pending,
+        "local_clips": local_clips,
         "auto_upload": bool(prefs.get("auto_upload", True)),
         "youtube_connected": yt["connected"],
         "monitor": controller.status(),
@@ -514,6 +600,97 @@ def youtube_videos(
 ):
     up = _uploader_or_400()
     return fetch_my_uploads_page(up.youtube_service, max_results=max_results, page_token=page_token)
+
+
+@app.get("/youtube/video")
+def youtube_one_video(id: str = Query(..., min_length=1, description="ID do vídeo no YouTube")):
+    up = _uploader_or_400()
+    out = fetch_video_by_id(up.youtube_service, id.strip())
+    if out.get("error"):
+        msg = out["error"]
+        code = 404 if "não encontrado" in msg.lower() else 400
+        raise HTTPException(status_code=code, detail=msg)
+    return out
+
+
+class YoutubeVideosDeleteBody(BaseModel):
+    ids: List[str] = Field(..., min_length=1)
+
+
+@app.post("/youtube/videos/delete")
+def youtube_videos_delete(body: YoutubeVideosDeleteBody):
+    up = _uploader_or_400()
+    deleted = 0
+    errors: List[Dict[str, str]] = []
+    for raw in body.ids:
+        vid = (raw or "").strip()
+        if not vid:
+            errors.append({"id": raw or "", "detail": "ID vazio."})
+            continue
+        ok, msg = up.delete_video(vid)
+        if ok:
+            deleted += 1
+        else:
+            errors.append({"id": vid, "detail": msg or "Falha desconhecida."})
+    return {"deleted": deleted, "errors": errors}
+
+
+class YoutubeVideoUpdateBody(BaseModel):
+    id: str = Field(..., min_length=1)
+    title: Optional[str] = None
+    description: Optional[str] = None
+    privacy: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+
+@app.post("/youtube/videos/update")
+def youtube_video_update(body: YoutubeVideoUpdateBody):
+    if (
+        body.title is None
+        and body.description is None
+        and body.privacy is None
+        and body.tags is None
+    ):
+        raise HTTPException(status_code=400, detail="Nada para atualizar.")
+    up = _uploader_or_400()
+    ok, msg = up.update_video(
+        body.id.strip(),
+        title=body.title,
+        description=body.description,
+        privacy_status=body.privacy,
+        tags=body.tags,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"ok": True}
+
+
+class YoutubeVideosPrivacyBody(BaseModel):
+    ids: List[str] = Field(..., min_length=1)
+    privacy: str = Field(..., min_length=1)
+
+
+@app.post("/youtube/videos/privacy")
+def youtube_videos_privacy(body: YoutubeVideosPrivacyBody):
+    p = body.privacy.strip().lower()
+    if p not in ("public", "unlisted", "private"):
+        raise HTTPException(
+            status_code=400, detail="privacy deve ser public, unlisted ou private."
+        )
+    up = _uploader_or_400()
+    updated = 0
+    errors: List[Dict[str, str]] = []
+    for raw in body.ids:
+        vid = (raw or "").strip()
+        if not vid:
+            errors.append({"id": raw or "", "detail": "ID vazio."})
+            continue
+        ok, msg = up.update_video(vid, privacy_status=p)
+        if ok:
+            updated += 1
+        else:
+            errors.append({"id": vid, "detail": msg or "Falha."})
+    return {"updated": updated, "errors": errors}
 
 
 # --- YouTube Analytics ---

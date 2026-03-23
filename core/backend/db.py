@@ -4,7 +4,7 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .paths import database_path, get_user_data_dir
 
@@ -164,6 +164,26 @@ def list_upload_success_paths() -> List[str]:
             """
         ).fetchall()
         return [r["file_path"] for r in rows]
+
+
+def list_latest_upload_success_with_created() -> List[Tuple[str, str]]:
+    """Último evento upload_success por file_path (maior id), com created_at."""
+    init_db()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT e.file_path, e.created_at
+            FROM events e
+            WHERE e.type = 'upload_success'
+              AND e.file_path IS NOT NULL
+              AND e.file_path != ''
+              AND e.id = (
+                SELECT MAX(e2.id) FROM events e2
+                WHERE e2.type = 'upload_success' AND e2.file_path = e.file_path
+              )
+            """
+        ).fetchall()
+        return [(r["file_path"], r["created_at"]) for r in rows]
 
 
 def list_events(

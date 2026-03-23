@@ -27,29 +27,25 @@ function App() {
     loadStatus()
   }, [loadStatus])
 
-  if (phase === 'loading') {
-    return (
-      <div className="flex h-screen items-center justify-center bg-kamui-black">
-        <KamuiLoader />
-      </div>
-    )
-  }
-
-  if (phase === 'setup') {
-    return <SetupWizard onComplete={() => setPhase('app')} />
-  }
-
   return (
     <BackendStatusProvider>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/youtube" element={<YouTubeRoute />} />
-          <Route path="/local" element={<Local />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/history" element={<History />} />
-        </Routes>
-      </Layout>
+      {phase === 'loading' ? (
+        <div className="flex h-screen items-center justify-center bg-kamui-black">
+          <KamuiLoader />
+        </div>
+      ) : phase === 'setup' ? (
+        <SetupWizard onComplete={() => setPhase('app')} />
+      ) : (
+        <Layout>
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/youtube" element={<YouTubeRoute />} />
+            <Route path="/local" element={<Local />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/history" element={<History />} />
+          </Routes>
+        </Layout>
+      )}
     </BackendStatusProvider>
   )
 }
