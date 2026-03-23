@@ -1,4 +1,4 @@
-# Kamui — backend Python (`backend`)
+# Kamui — backend Python (`core/backend`)
 
 API HTTP local (FastAPI), monitor de pasta, SQLite em `KAMUI_USER_DATA`, integração YouTube (Data v3 + Analytics v2).
 
@@ -16,7 +16,7 @@ Fluxo OAuth, quotas e detalhes de produto: ver [YOUTUBE_IMPLEMENTATION.md](./YOU
 ```bash
 cd core
 uv sync
-python -m backend
+uv run python -m backend
 ```
 
 O processo imprime `KAMUI_PORT=<porta>` no stdout; a UI Electron lê esta linha. URL base típica: `http://127.0.0.1:<porta>`.
@@ -43,9 +43,11 @@ Documentação interativa: `GET /docs`, schema `GET /openapi.json`.
 | PUT | `/setup/client-secrets` | Credenciais Google | `{"raw_json"}` | JSON do OAuth desktop |
 | POST | `/setup/finalize` | Concluir setup | — | Valida passos pendentes |
 | POST | `/auth/youtube` | OAuth browser | — | Grava `token.pickle` |
+| POST | `/auth/youtube/disconnect` | Desconectar conta YouTube | — | Remove `token.pickle` local para forçar novo login |
 | GET | `/youtube/status` | Ligação YouTube | — | |
 | GET | `/youtube/channel` | Dados do canal | — | Requer token válido |
 | GET | `/youtube/videos` | Lista uploads | `max_results`, `page_token` | |
+| GET | `/youtube/video` | Detalhe de um vídeo | `id` | Busca um vídeo específico pelo ID |
 | POST | `/youtube/videos/delete` | Remove vídeos do canal | `{"ids": ["<youtubeVideoId>", ...]}` | Resposta: `deleted`, `errors[]` parciais; requer scope `youtube.force-ssl` |
 | POST | `/youtube/videos/update` | Atualiza um vídeo | `{"id", "title"?, "description"?, "privacy"?, "tags"?}` | Pelo menos um campo opcional; `privacy`: public \| unlisted \| private |
 | POST | `/youtube/videos/privacy` | Privacidade em massa | `{"ids": [...], "privacy"}` | Resposta: `updated`, `errors[]` |
@@ -71,6 +73,12 @@ Documentação interativa: `GET /docs`, schema `GET /openapi.json`.
 - Credencial tipo **aplicação para computador**.
 - Scopes usados: `youtube.upload`, `youtube.readonly`, `youtube.force-ssl` (eliminar, atualizar privacidade e metadados via API), `yt-analytics.readonly`.
 - Ao adicionar ou alterar scopes, é necessário **voltar a autorizar** em Configurações (novo `token.pickle`). Sem `youtube.force-ssl`, eliminar ou editar vídeos na UI pode falhar por permissão.
+
+## Notas rápidas
+
+- `GET /setup/status` e `GET /youtube/status` aceitam `probe=true` para invalidar cache e forçar nova verificação imediata.
+- O backend inicializa o monitor automaticamente no arranque quando o setup já está completo.
+- O token OAuth pode ser removido via `POST /auth/youtube/disconnect` para trocar de conta sem apagar o resto das configurações.
 
 ## CLI (dev)
 
