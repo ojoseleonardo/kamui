@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
 const path = require('path')
 const { spawn } = require('child_process')
 const readline = require('readline')
@@ -174,6 +174,25 @@ app.whenReady().then(async () => {
     })
     if (r.canceled || !r.filePaths.length) return null
     return r.filePaths[0]
+  })
+
+  ipcMain.handle('open-path', async (_event, targetPath) => {
+    const p = typeof targetPath === 'string' ? targetPath.trim() : ''
+    if (!p) return { ok: false, error: 'Caminho inválido.' }
+    const err = await shell.openPath(p)
+    if (err) return { ok: false, error: err }
+    return { ok: true }
+  })
+
+  ipcMain.handle('show-item-in-folder', async (_event, targetPath) => {
+    const p = typeof targetPath === 'string' ? targetPath.trim() : ''
+    if (!p) return { ok: false, error: 'Caminho inválido.' }
+    try {
+      shell.showItemInFolder(p)
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: e?.message || String(e) }
+    }
   })
 
   try {

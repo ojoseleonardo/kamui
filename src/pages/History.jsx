@@ -56,7 +56,7 @@ const typeConfig = {
 }
 
 function History() {
-  const { events, loading, error, refresh } = useEvents({ limit: 500 })
+  const { events, loading, error, refresh } = useEvents({ limit: 500, reconcileUploads: true })
   const { stats, refresh: refreshStats } = useEventsStats(true)
   const [searchQuery, setSearchQuery] = useState('')
   const [filterType, setFilterType] = useState('all')
@@ -92,7 +92,7 @@ function History() {
   const byType = stats?.by_type || {}
   const statsRow = {
     total: stats?.total ?? 0,
-    uploads: byType.upload_success ?? 0,
+    uploads: stats?.uploads_truth ?? byType.upload_success ?? 0,
     errors: byType.upload_error ?? 0,
     detected: byType.clip_detected ?? 0,
   }

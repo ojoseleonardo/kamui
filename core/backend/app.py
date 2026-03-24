@@ -10,13 +10,13 @@ import shutil
 import threading
 import time
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from . import db
@@ -28,7 +28,7 @@ from .paths import (
     token_path,
 )
 from .video_manager import VideoManager
-from .youtube_analytics import fetch_channel_analytics, fetch_daily_views_series
+from .youtube_analytics import fetch_channel_analytics
 from .video_thumbnail import extract_thumbnail_jpeg, resolve_watch_video_path
 from .youtube_read import (
     clear_mine_uploads_playlist_cache,
@@ -37,6 +37,7 @@ from .youtube_read import (
     fetch_video_by_id,
 )
 from .youtube_uploader import YouTubeUploader, perform_youtube_oauth
+from .youtube_rate_limit import acquire_google_youtube_slot
 
 
 class MonitorController:
@@ -49,11 +50,8 @@ class MonitorController:
     def _prefs(self) -> Dict[str, Any]:
         return db.get_preferences()
 
-    def _auto_upload(self) -> bool:
-        return bool(self._prefs().get("auto_upload", True))
-
     def _privacy(self) -> str:
-        return str(self._prefs().get("default_privacy", "private"))
+        return str(self._prefs().get("default_privacy", "unlisted"))
 
     def build_manager(self) -> Optional[VideoManager]:
         if not db.is_setup_complete():
@@ -68,7 +66,6 @@ class MonitorController:
             credentials_file=str(c),
             token_file=str(t),
             log_dir=str(logs_dir()),
-            auto_upload=self._auto_upload(),
             privacy_status=self._privacy(),
         )
 
@@ -108,7 +105,20 @@ class MonitorController:
             if self._manager:
                 self._manager.rebuild_youtube()
 
-    def manual_upload(self, file_path: str) -> tuple[Optional[str], str]:
+    def manual_upload(
+        self,
+        file_path: str,
+        *,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        privacy: Optional[str] = None,
+        thumbnail_mode: str = "frame",
+        thumbnail_seek_ms: int = 800,
+        thumbnail_url: Optional[str] = None,
+        thumbnail_bytes: Optional[bytes] = None,
+        thumbnail_mime: Optional[str] = None,
+    ) -> tuple[Optional[str], str]:
         wf = (db.get_setting("watch_folder") or "").strip()
         if not wf:
             return None, "Pasta monitorada não configurada."
@@ -130,10 +140,21 @@ class MonitorController:
             m = self.build_manager()
         if not m:
             return None, "Não foi possível iniciar o gerenciador (credenciais YouTube?)."
-        vid = m.upload_video_manually(str(p))
+        vid, upload_err = m.upload_video_manually(
+            str(p),
+            title=title,
+            description=description,
+            tags=tags,
+            privacy_status=privacy,
+            thumbnail_mode=thumbnail_mode,
+            thumbnail_seek_ms=thumbnail_seek_ms,
+            thumbnail_url=thumbnail_url,
+            thumbnail_bytes=thumbnail_bytes,
+            thumbnail_mime=thumbnail_mime,
+        )
         if vid:
             return vid, ""
-        return None, "Upload falhou ou YouTube indisponível."
+        return None, upload_err or "Upload falhou ou YouTube indisponível."
 
 
 controller = MonitorController()
@@ -148,6 +169,7 @@ def _folder_monitor() -> Optional[FileMonitor]:
 
 
 _youtube_status_cache: Dict[str, Any] = {"t": 0.0, "payload": None}
+_dashboard_youtube_cache: Dict[str, Any] = {"t": 0.0, "total_uploads": None, "uploads_by_day": {}}
 
 
 def _invalidate_youtube_status_cache() -> None:
@@ -158,7 +180,14 @@ def _invalidate_youtube_status_cache() -> None:
 def _invalidate_youtube_api_caches() -> None:
     """Após novo OAuth ou troca de conta — não reutilizar estado antigo."""
     _invalidate_youtube_status_cache()
+    _invalidate_dashboard_youtube_cache()
     clear_mine_uploads_playlist_cache()
+
+
+def _invalidate_dashboard_youtube_cache() -> None:
+    _dashboard_youtube_cache["t"] = 0.0
+    _dashboard_youtube_cache["total_uploads"] = None
+    _dashboard_youtube_cache["uploads_by_day"] = {}
 
 
 def _youtube_status_cache_ttl_seconds(payload: Dict[str, Any]) -> float:
@@ -202,6 +231,67 @@ def _youtube_status() -> Dict[str, Any]:
     _youtube_status_cache["t"] = now
     _youtube_status_cache["payload"] = payload
     return payload
+
+
+def _youtube_uploads_per_day_last_days(service: Any, days: int = 7, max_pages: int = 12) -> Dict[str, int]:
+    """
+    Conta uploads por dia usando a playlist de uploads do canal.
+    Lê até `max_pages` (50 itens/página) e para cedo quando os itens
+    ficam mais antigos do que a janela desejada.
+    """
+    cutoff = date.today() - timedelta(days=days - 1)
+    counts: Dict[str, int] = {}
+    token: Optional[str] = None
+    pages = 0
+
+    while pages < max_pages:
+        page = fetch_my_uploads_page(service, max_results=50, page_token=token)
+        items = page.get("items") or []
+        if not items:
+            break
+
+        reached_older = False
+        for item in items:
+            published = str(item.get("published_at") or "")
+            if not published:
+                continue
+            try:
+                dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                day = dt.astimezone(timezone.utc).date()
+            except ValueError:
+                continue
+
+            if day < cutoff:
+                reached_older = True
+                continue
+
+            day_iso = day.isoformat()
+            counts[day_iso] = counts.get(day_iso, 0) + 1
+
+        token = page.get("next_page_token")
+        pages += 1
+        if not token or reached_older:
+            break
+
+    return counts
+
+
+def _youtube_existing_video_ids(service: Any, youtube_ids: List[str]) -> set[str]:
+    existing: set[str] = set()
+    clean = [str(x).strip() for x in youtube_ids if str(x or "").strip()]
+    if not clean:
+        return existing
+    for i in range(0, len(clean), 50):
+        chunk = clean[i : i + 50]
+        acquire_google_youtube_slot()
+        res = service.videos().list(part="id", id=",".join(chunk), maxResults=50).execute()
+        for item in res.get("items") or []:
+            vid = str(item.get("id") or "").strip()
+            if vid:
+                existing.add(vid)
+    return existing
 
 
 def _setup_missing() -> List[str]:
@@ -412,7 +502,7 @@ def put_prefs(body: PreferencesBody):
 
 @app.post("/settings/reload")
 async def settings_reload():
-    """Reinicia monitor com prefs atuais (útil após mudar auto_upload)."""
+    """Reinicia monitor com prefs atuais (privacidade padrão, etc.)."""
     await asyncio.to_thread(controller.stop)
     ok, msg = await asyncio.to_thread(controller.start)
     if not ok:
@@ -463,6 +553,16 @@ def folder_video_thumbnail(path: str = Query(..., min_length=1, description="Cam
     return Response(content=data, media_type="image/jpeg")
 
 
+@app.get("/folder/video/play")
+def folder_video_play(path: str = Query(..., min_length=1, description="Caminho absoluto do vídeo")):
+    p = resolve_watch_video_path(path)
+    if not p:
+        raise HTTPException(status_code=404, detail="Vídeo não encontrado ou fora da pasta monitorada.")
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail="Arquivo de vídeo não encontrado.")
+    return FileResponse(path=str(p), media_type="video/mp4", filename=p.name)
+
+
 class FolderVideosDeleteBody(BaseModel):
     paths: List[str] = Field(..., min_length=1)
 
@@ -485,6 +585,12 @@ def folder_videos_delete(body: FolderVideosDeleteBody):
             continue
         if m.delete_video(str(p)):
             deleted += 1
+            db.insert_event(
+                "file_deleted",
+                title="Arquivo local removido",
+                detail=p.name,
+                file_path=str(p),
+            )
         else:
             errors.append({"path": s, "detail": "Não foi possível apagar o ficheiro permanentemente."})
     return {"deleted": deleted, "errors": errors}
@@ -498,26 +604,71 @@ def events_list(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     event_type: Optional[str] = Query(None, alias="type"),
+    reconcile_uploads: bool = Query(False),
     since: Optional[str] = None,
     until: Optional[str] = None,
 ):
-    return {
-        "events": db.list_events(
-            limit=limit,
-            offset=offset,
-            type_filter=event_type,
-            since_iso=since,
-            until_iso=until,
-        )
-    }
+    events = db.list_events(
+        limit=limit,
+        offset=offset,
+        type_filter=event_type,
+        since_iso=since,
+        until_iso=until,
+    )
+
+    if reconcile_uploads:
+        ids = [str(e.get("youtube_id") or "").strip() for e in events if e.get("type") == "upload_success"]
+        ids = [x for x in ids if x]
+        if ids:
+            yt = _youtube_status()
+            if yt.get("connected"):
+                try:
+                    up = _uploader_or_400()
+                    existing = _youtube_existing_video_ids(up.youtube_service, ids)
+                    missing = [vid for vid in ids if vid not in existing]
+                    changed = False
+                    for vid in missing:
+                        if not db.has_event_with_type_and_youtube_id("youtube_deleted", vid):
+                            db.insert_event(
+                                "youtube_deleted",
+                                title="Vídeo removido do YouTube",
+                                detail=vid,
+                                youtube_id=vid,
+                            )
+                            changed = True
+                    if changed:
+                        events = db.list_events(
+                            limit=limit,
+                            offset=offset,
+                            type_filter=event_type,
+                            since_iso=since,
+                            until_iso=until,
+                        )
+                except Exception:
+                    # Em falha de rede/API, mantém a resposta local sem bloquear a UI.
+                    pass
+
+    return {"events": events}
 
 
 @app.get("/events/stats")
 def events_stats():
     by_t = db.event_counts_by_type()
+    uploads_truth = db.count_upload_success()
+    yt = _youtube_status()
+    if yt.get("connected"):
+        try:
+            up = _uploader_or_400()
+            ch = fetch_channel_summary(up.youtube_service)
+            if not ch.get("error"):
+                uploads_truth = int(ch.get("video_count", uploads_truth) or uploads_truth)
+        except Exception:
+            # Falha na leitura do YouTube: mantém fallback local.
+            pass
     return {
         "by_type": by_t,
         "total": sum(by_t.values()),
+        "uploads_truth": uploads_truth,
     }
 
 
@@ -538,46 +689,77 @@ def dashboard_summary():
     if m:
         local_clips = len(m.list_videos(recursive=True))
 
-    uploads_7 = db.uploads_per_day(7)
     yt = _youtube_status()
+    uploads_local_7 = db.uploads_per_day(7)
+    uploads_effective_7 = uploads_local_7
+    uploads_youtube_by_day: Dict[str, int] = {}
+    yt_deletions_7 = db.youtube_deletions_per_day(7)
+    local_deletions_7 = db.local_deletions_per_day(7)
+    total_uploads = db.count_upload_success()
     activity = []
-    views_by_day: Dict[str, int] = {}
-    views_series_error: Optional[str] = None
     if yt["connected"]:
         c = client_secrets_path()
         t = token_path()
         up = YouTubeUploader(str(c), str(t), defer_interactive=True)
         if up.google_credentials and up.youtube_service:
-            end_d = date.today()
-            start_d = end_d - timedelta(days=6)
-            series = fetch_daily_views_series(
-                up.google_credentials,
-                start_d.isoformat(),
-                end_d.isoformat(),
-            )
-            views_series_error = series.get("error")
-            for row in series.get("series") or []:
-                views_by_day[str(row.get("day", ""))] = int(row.get("views", 0))
+            now = time.monotonic()
+            cached_ok = now - float(_dashboard_youtube_cache.get("t", 0.0)) < 45.0
+            cached_total = _dashboard_youtube_cache.get("total_uploads")
+            cached_uploads = _dashboard_youtube_cache.get("uploads_by_day") or {}
+            if cached_ok and cached_total is not None:
+                total_uploads = int(cached_total)
+                yt_uploads_by_day = {str(k): int(v) for k, v in cached_uploads.items()}
+            else:
+                ch = fetch_channel_summary(up.youtube_service)
+                if not ch.get("error"):
+                    total_uploads = int(ch.get("video_count", total_uploads) or total_uploads)
+                yt_uploads_by_day = _youtube_uploads_per_day_last_days(up.youtube_service, days=7)
+                _dashboard_youtube_cache["t"] = now
+                _dashboard_youtube_cache["total_uploads"] = total_uploads
+                _dashboard_youtube_cache["uploads_by_day"] = dict(yt_uploads_by_day)
 
-    for row in uploads_7:
+            names = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+            rebuilt: List[Dict[str, Any]] = []
+            for i in range(6, -1, -1):
+                d = date.today() - timedelta(days=i)
+                d_iso = d.isoformat()
+                rebuilt.append(
+                    {
+                        "day": d_iso,
+                        "name": names[d.weekday()],
+                        "uploads": int(yt_uploads_by_day.get(d_iso, 0)),
+                    }
+                )
+            uploads_effective_7 = rebuilt
+            for row in rebuilt:
+                uploads_youtube_by_day[row["day"]] = int(row.get("uploads", 0))
+
+    yt_deletions_by_day = {row["day"]: int(row.get("deleted", 0)) for row in yt_deletions_7}
+    local_deletions_by_day = {row["day"]: int(row.get("deleted", 0)) for row in local_deletions_7}
+    uploads_local_by_day = {row["day"]: int(row.get("uploads", 0)) for row in uploads_local_7}
+
+    for row in uploads_effective_7:
         d = row["day"]
         activity.append(
             {
                 "name": row["name"],
                 "day": d,
                 "uploads": row["uploads"],
-                "views": views_by_day.get(d, 0),
+                "uploads_local": uploads_local_by_day.get(d, 0),
+                "uploads_youtube": uploads_youtube_by_day.get(d, 0),
+                "youtube_deleted": yt_deletions_by_day.get(d, 0),
+                "local_deleted": local_deletions_by_day.get(d, 0),
+                "deleted": yt_deletions_by_day.get(d, 0),
             }
         )
 
     return {
-        "total_uploads": db.count_upload_success(),
+        "total_uploads": total_uploads,
         "local_clips": local_clips,
-        "auto_upload": bool(prefs.get("auto_upload", True)),
+        "upload_mode": "manual",
         "youtube_connected": yt["connected"],
         "monitor": controller.status(),
         "activity_days": activity,
-        "activity_views_error": views_series_error,
     }
 
 
@@ -630,6 +812,13 @@ def youtube_videos_delete(body: YoutubeVideosDeleteBody):
         ok, msg = up.delete_video(vid)
         if ok:
             deleted += 1
+            _invalidate_dashboard_youtube_cache()
+            db.insert_event(
+                "youtube_deleted",
+                title="Vídeo removido do YouTube",
+                detail=vid,
+                youtube_id=vid,
+            )
         else:
             errors.append({"id": vid, "detail": msg or "Falha desconhecida."})
     return {"deleted": deleted, "errors": errors}
@@ -728,13 +917,73 @@ def youtube_analytics(
 # --- Upload manual ---
 
 
-class ManualUploadBody(BaseModel):
-    path: str = Field(..., min_length=1)
+_THUMB_MODES = frozenset({"frame", "file", "url", "youtube"})
 
 
 @app.post("/uploads/manual")
-async def uploads_manual(body: ManualUploadBody):
-    vid, err = await asyncio.to_thread(controller.manual_upload, body.path.strip())
+async def uploads_manual(
+    path: str = Form(..., min_length=1),
+    title: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    tags: Optional[str] = Form(None),
+    privacy: Optional[str] = Form(None),
+    thumbnail_mode: str = Form("frame"),
+    thumbnail_seek_ms: Optional[int] = Form(None),
+    thumbnail_url: Optional[str] = Form(None),
+    thumbnail: Optional[UploadFile] = File(None),
+):
+    mode = (thumbnail_mode or "frame").strip().lower()
+    if mode not in _THUMB_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail="thumbnail_mode deve ser frame, file, url ou youtube.",
+        )
+    if privacy is not None and str(privacy).strip():
+        pv = str(privacy).strip().lower()
+        if pv not in ("public", "unlisted", "private"):
+            raise HTTPException(status_code=400, detail="privacy inválido.")
+    else:
+        pv = None
+
+    tag_list: Optional[List[str]] = None
+    if tags is not None and str(tags).strip():
+        tag_list = [t.strip() for t in str(tags).split(",") if t.strip()]
+
+    seek_ms = 800 if thumbnail_seek_ms is None else max(0, int(thumbnail_seek_ms))
+
+    thumb_bytes: Optional[bytes] = None
+    thumb_mime: Optional[str] = None
+    if mode == "file":
+        if thumbnail is None or not thumbnail.filename:
+            raise HTTPException(
+                status_code=400,
+                detail="Envie um ficheiro de imagem (campo thumbnail) quando thumbnail_mode=file.",
+            )
+        thumb_bytes = await thumbnail.read()
+        if not thumb_bytes:
+            raise HTTPException(status_code=400, detail="Ficheiro de miniatura vazio.")
+        thumb_mime = (thumbnail.content_type or "").split(";")[0].strip().lower() or None
+        if thumb_mime not in ("image/jpeg", "image/jpg", "image/png"):
+            raise HTTPException(
+                status_code=400,
+                detail="Miniatura deve ser JPEG ou PNG.",
+            )
+
+    def _run():
+        return controller.manual_upload(
+            path.strip(),
+            title=title.strip() if title else None,
+            description=description if description is not None else None,
+            tags=tag_list,
+            privacy=pv,
+            thumbnail_mode=mode,
+            thumbnail_seek_ms=seek_ms,
+            thumbnail_url=(thumbnail_url.strip() if thumbnail_url else None),
+            thumbnail_bytes=thumb_bytes,
+            thumbnail_mime=thumb_mime,
+        )
+
+    vid, err = await asyncio.to_thread(_run)
     if not vid:
         raise HTTPException(status_code=400, detail=err or "Falha no upload.")
     return {"ok": True, "youtube_id": vid, "url": f"https://www.youtube.com/watch?v={vid}"}

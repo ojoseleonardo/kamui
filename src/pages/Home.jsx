@@ -106,9 +106,6 @@ function Home() {
                   Atividade (7 dias)
                 </CardTitle>
               </div>
-              {d.activity_views_error && (
-                <p className="text-xs text-amber-400/90 mt-2">{d.activity_views_error}</p>
-              )}
             </CardHeader>
             <CardContent className="flex min-h-0 flex-1 flex-col">
               <div className="min-h-64 flex-1">
@@ -179,29 +176,6 @@ function Home() {
                     aria-hidden
                   />
                   {youtubeConnected ? 'Conectado' : 'Desconectado'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-kamui-white-muted">Auto-upload</span>
-                <span
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
-                    d.auto_upload
-                      ? 'border-kamui-red/35 bg-kamui-red/10 text-kamui-red-light'
-                      : 'border-white/[0.08] bg-kamui-black/40 text-kamui-white-muted',
-                  )}
-                  role="status"
-                >
-                  <span
-                    className={cn(
-                      'h-1.5 w-1.5 shrink-0 rounded-full',
-                      d.auto_upload
-                        ? 'animate-pulse bg-kamui-red shadow-[0_0_8px_rgba(196,30,58,0.5)]'
-                        : 'bg-kamui-gray-light',
-                    )}
-                    aria-hidden
-                  />
-                  {d.auto_upload ? 'Sim' : 'Não'}
                 </span>
               </div>
               {mon.watch_folder && (

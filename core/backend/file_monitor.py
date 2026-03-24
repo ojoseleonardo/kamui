@@ -39,7 +39,10 @@ class VideoFileHandler(FileSystemEventHandler):
         self.logger = LoggerConfig.get_logger(__name__)
 
     def on_created(self, event: FileSystemEvent):
-        if not event.is_directory and self._is_video_file(event.src_path):
+        if event.is_directory:
+            self._emit_videos_from_directory(event.src_path)
+            return
+        if self._is_video_file(event.src_path):
             self.logger.info(f"[DETECÇÃO] Novo vídeo criado: {event.src_path}")
             if self.callback:
                 self.callback("created", event.src_path)
@@ -57,7 +60,10 @@ class VideoFileHandler(FileSystemEventHandler):
                 self.callback("modified", event.src_path)
 
     def on_moved(self, event: FileSystemEvent):
-        if not event.is_directory and self._is_video_file(event.dest_path):
+        if event.is_directory:
+            self._emit_videos_from_directory(event.dest_path)
+            return
+        if self._is_video_file(event.dest_path):
             self.logger.info(f"[MOVIMENTAÇÃO] Vídeo movido: {event.src_path} -> {event.dest_path}")
             if self.callback:
                 self.callback("moved", event.src_path, event.dest_path)
@@ -65,6 +71,16 @@ class VideoFileHandler(FileSystemEventHandler):
     @staticmethod
     def _is_video_file(file_path: str) -> bool:
         return Path(file_path).suffix.lower() in VIDEO_EXTENSIONS
+
+    def _emit_videos_from_directory(self, directory_path: str) -> None:
+        base = Path(directory_path)
+        if not base.exists() or not base.is_dir():
+            return
+        for file_path in base.rglob("*"):
+            if file_path.is_file() and self._is_video_file(str(file_path)):
+                self.logger.info(f"[DETECÇÃO] Vídeo detectado em subpasta: {file_path}")
+                if self.callback:
+                    self.callback("created", str(file_path))
 
 
 class FileMonitor:
@@ -233,6 +249,8 @@ class FileMonitor:
         self.observer = Observer()
         self.observer.schedule(self.event_handler, str(self.watch_folder), recursive=True)
         self.observer.start()
+        # Garante deteção também para vídeos já existentes em subpastas no arranque.
+        self.event_handler._emit_videos_from_directory(str(self.watch_folder))
         self.logger.info(f"[MONITORAMENTO] Iniciado para: {self.watch_folder}")
 
     def stop_monitoring(self):

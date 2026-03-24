@@ -199,6 +199,20 @@ def list_events(
     if type_filter:
         q += " AND type = ?"
         params.append(type_filter)
+    # Não mostrar uploads que já foram removidos do YouTube.
+    q += """
+     AND NOT (
+         type = 'upload_success'
+         AND EXISTS (
+             SELECT 1
+             FROM events d
+             WHERE d.type = 'youtube_deleted'
+               AND d.youtube_id IS NOT NULL
+               AND d.youtube_id != ''
+               AND d.youtube_id = events.youtube_id
+         )
+     )
+    """
     if since_iso:
         q += " AND created_at >= ?"
         params.append(since_iso)
@@ -234,6 +248,25 @@ def list_events(
     return out
 
 
+def has_event_with_type_and_youtube_id(type_: str, youtube_id: str) -> bool:
+    init_db()
+    yt = (youtube_id or "").strip()
+    if not yt:
+        return False
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM events
+            WHERE type = ?
+              AND youtube_id = ?
+            LIMIT 1
+            """,
+            (type_, yt),
+        ).fetchone()
+        return row is not None
+
+
 def event_counts_by_type() -> Dict[str, int]:
     init_db()
     with _connect() as conn:
@@ -250,10 +283,19 @@ def uploads_per_day(days: int = 7) -> List[Dict[str, Any]]:
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT date(created_at) AS day, COUNT(*) AS uploads
-            FROM events
-            WHERE type = 'upload_success' AND date(created_at) >= date(?)
-            GROUP BY date(created_at)
+            SELECT date(e.created_at) AS day, COUNT(*) AS uploads
+            FROM events e
+            WHERE e.type = 'upload_success'
+              AND date(e.created_at) >= date(?)
+              AND NOT EXISTS (
+                SELECT 1
+                FROM events d
+                WHERE d.type = 'youtube_deleted'
+                  AND d.youtube_id IS NOT NULL
+                  AND d.youtube_id != ''
+                  AND d.youtube_id = e.youtube_id
+              )
+            GROUP BY date(e.created_at)
             ORDER BY day
             """,
             (start,),
@@ -274,11 +316,85 @@ def uploads_per_day(days: int = 7) -> List[Dict[str, Any]]:
     return out
 
 
+def youtube_deletions_per_day(days: int = 7) -> List[Dict[str, Any]]:
+    """Contagem de youtube_deleted por dia (últimos `days` dias, inclusive hoje)."""
+    init_db()
+    start = (datetime.now(timezone.utc) - timedelta(days=days - 1)).date().isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT date(created_at) AS day, COUNT(*) AS deleted
+            FROM events
+            WHERE type = 'youtube_deleted' AND date(created_at) >= date(?)
+            GROUP BY date(created_at)
+            ORDER BY day
+            """,
+            (start,),
+        ).fetchall()
+    by_day = {r["day"]: int(r["deleted"]) for r in rows}
+    names = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+    out: List[Dict[str, Any]] = []
+    for i in range(days - 1, -1, -1):
+        d = (datetime.now(timezone.utc) - timedelta(days=i)).date()
+        d_iso = d.isoformat()
+        out.append(
+            {
+                "day": d_iso,
+                "name": names[d.weekday()],
+                "deleted": by_day.get(d_iso, 0),
+            }
+        )
+    return out
+
+
+def local_deletions_per_day(days: int = 7) -> List[Dict[str, Any]]:
+    """Contagem de file_deleted por dia (últimos `days` dias, inclusive hoje)."""
+    init_db()
+    start = (datetime.now(timezone.utc) - timedelta(days=days - 1)).date().isoformat()
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT date(created_at) AS day, COUNT(*) AS deleted
+            FROM events
+            WHERE type = 'file_deleted' AND date(created_at) >= date(?)
+            GROUP BY date(created_at)
+            ORDER BY day
+            """,
+            (start,),
+        ).fetchall()
+    by_day = {r["day"]: int(r["deleted"]) for r in rows}
+    names = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
+    out: List[Dict[str, Any]] = []
+    for i in range(days - 1, -1, -1):
+        d = (datetime.now(timezone.utc) - timedelta(days=i)).date()
+        d_iso = d.isoformat()
+        out.append(
+            {
+                "day": d_iso,
+                "name": names[d.weekday()],
+                "deleted": by_day.get(d_iso, 0),
+            }
+        )
+    return out
+
+
 def count_upload_success() -> int:
     init_db()
     with _connect() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) AS c FROM events WHERE type = 'upload_success'"
+            """
+            SELECT COUNT(*) AS c
+            FROM events e
+            WHERE e.type = 'upload_success'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM events d
+                WHERE d.type = 'youtube_deleted'
+                  AND d.youtube_id IS NOT NULL
+                  AND d.youtube_id != ''
+                  AND d.youtube_id = e.youtube_id
+              )
+            """
         ).fetchone()
         return int(row["c"]) if row else 0
 

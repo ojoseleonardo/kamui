@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiGet } from '@/lib/api'
 
-export function useEvents({ limit = 100, offset = 0, type, enabled = true } = {}) {
+export function useEvents({ limit = 100, offset = 0, type, enabled = true, reconcileUploads = false } = {}) {
   const [events, setEvents] = useState([])
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(!!enabled)
@@ -16,6 +16,7 @@ export function useEvents({ limit = 100, offset = 0, type, enabled = true } = {}
     try {
       const params = { limit, offset }
       if (type) params.type = type
+      if (reconcileUploads) params.reconcile_uploads = '1'
       const d = await apiGet('/events', params)
       setEvents(d.events || [])
       setError(null)
@@ -25,7 +26,7 @@ export function useEvents({ limit = 100, offset = 0, type, enabled = true } = {}
     } finally {
       setLoading(false)
     }
-  }, [enabled, limit, offset, type])
+  }, [enabled, limit, offset, type, reconcileUploads])
 
   useEffect(() => {
     refresh()

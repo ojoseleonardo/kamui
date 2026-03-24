@@ -78,6 +78,25 @@ export async function apiPost(path) {
   return res.json()
 }
 
+export async function apiPostFormData(path, formData) {
+  const url = await apiUrl(path)
+  const res = await fetch(url, {
+    method: 'POST',
+    body: formData,
+  })
+  if (!res.ok) {
+    let detail = await res.text()
+    try {
+      const j = JSON.parse(detail)
+      detail = j.detail || detail
+    } catch (_) {
+      /* texto */
+    }
+    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail))
+  }
+  return res.json()
+}
+
 export async function apiPostJson(path, body) {
   const url = await apiUrl(path)
   const res = await fetch(url, {
@@ -131,3 +150,28 @@ export async function selectVideoFileElectron() {
   }
   return null
 }
+
+export async function openPathElectron(targetPath) {
+  try {
+    if (typeof window.require === 'function') {
+      const { ipcRenderer } = window.require('electron')
+      return await ipcRenderer.invoke('open-path', targetPath)
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return { ok: false, error: 'Abertura de arquivo local requer app desktop (Electron).' }
+}
+
+export async function showItemInFolderElectron(targetPath) {
+  try {
+    if (typeof window.require === 'function') {
+      const { ipcRenderer } = window.require('electron')
+      return await ipcRenderer.invoke('show-item-in-folder', targetPath)
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return { ok: false, error: 'Revelar arquivo requer app desktop (Electron).' }
+}
+

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   FolderOpen,
+  Folder,
   Search,
   Upload,
   FileVideo,
@@ -12,13 +13,27 @@ import {
   List,
   Trash2,
   ListChecks,
+  FolderSearch,
 } from 'lucide-react'
 import { Card, Button, SelectionCheckbox, ConfirmModal } from '@/components/ui'
 import { formatBytes, timeAgo } from '@/lib/utils'
 import KamuiLoader from '@/components/ui/KamuiLoader'
-import { apiPostJson, apiUrl } from '@/lib/api'
+import ManualUploadModal from '@/components/upload/ManualUploadModal'
+import { apiPostJson, apiUrl, openPathElectron, showItemInFolderElectron } from '@/lib/api'
 import { useFolderVideos } from '@/hooks/useFolderVideos'
 import { useBackendStatus } from '@/context/BackendStatusContext'
+
+function folderBadgeLabel(videoPath) {
+  try {
+    if (!videoPath) return 'Raiz'
+    const normalized = String(videoPath).replace(/\\/g, '/')
+    const parts = normalized.split('/').filter(Boolean)
+    if (parts.length < 2) return 'Raiz'
+    return parts[parts.length - 2] || 'Raiz'
+  } catch {
+    return 'Raiz'
+  }
+}
 
 function LocalVideoThumb({ videoPath }) {
   const [src, setSrc] = useState('')
@@ -76,17 +91,13 @@ function Local() {
   const { videos, error, loading, refresh } = useFolderVideos(backendReachable)
   const [searchQuery, setSearchQuery] = useState('')
   const [viewMode, setViewMode] = useState('list')
-  const [uploadPath, setUploadPath] = useState(null)
-  const [uploadBusy, setUploadBusy] = useState(false)
+  const [uploadPaths, setUploadPaths] = useState(null)
   const [selectedPaths, setSelectedPaths] = useState(() => new Set())
   const [deleteBusy, setDeleteBusy] = useState(false)
-  const [bulkUploadBusy, setBulkUploadBusy] = useState(false)
   const [selectionMode, setSelectionMode] = useState(false)
   const [trashConfirmPaths, setTrashConfirmPaths] = useState(null)
   const [trashFeedback, setTrashFeedback] = useState(null)
-  const [bulkUploadConfirm, setBulkUploadConfirm] = useState(false)
   const [bulkUploadFeedback, setBulkUploadFeedback] = useState(null)
-  const [uploadError, setUploadError] = useState(null)
 
   const filtered = useMemo(() => {
     const q = searchQuery.toLowerCase()
@@ -127,7 +138,7 @@ function Local() {
       await refresh()
       if (errs.length) {
         setTrashFeedback({
-          title: 'Concluído com avisos',
+          title: 'Concluído com alertas',
           body: `Apagados permanentemente: ${res.deleted ?? 0}. Falhas: ${errs.length}.`,
           lines: errs.slice(0, 8).map((e) => `${e.path}: ${e.detail}`),
         })
@@ -142,45 +153,48 @@ function Local() {
 
   const deleteOneLocal = (path) => openTrashConfirm([path])
 
-  const uploadOne = async (path) => {
-    setUploadPath(path)
-    setUploadBusy(true)
-    try {
-      await apiPostJson('/uploads/manual', { path })
-      await refresh()
-    } catch (e) {
-      setUploadError(e.message || String(e))
-    } finally {
-      setUploadBusy(false)
-      setUploadPath(null)
+  const openUploadModal = (paths) => {
+    if (!paths?.length) return
+    setUploadPaths(paths)
+  }
+
+  const handleUploadComplete = async ({ failures, attempted }) => {
+    await refresh()
+    if (failures?.length) {
+      setBulkUploadFeedback({
+        title: 'Envio para o YouTube',
+        body:
+          failures.length >= attempted
+            ? 'Nenhum envio concluído.'
+            : `Falharam ${failures.length} de ${attempted} envio(s).`,
+        lines: failures.slice(0, 12).map((f) => `${f.path}: ${f.message}`),
+      })
+    }
+    if (!failures?.length) {
+      setSelectedPaths(new Set())
+      setSelectionMode(false)
     }
   }
 
-  const runBulkUpload = async () => {
-    const selected = videos.filter((v) => selectedPaths.has(v.path))
-    if (!selected.length) return
-    setBulkUploadConfirm(false)
-    setBulkUploadBusy(true)
-    const failures = []
-    try {
-      for (const v of selected) {
-        try {
-          await apiPostJson('/uploads/manual', { path: v.path })
-        } catch (e) {
-          failures.push(`${v.name}: ${e.message || String(e)}`)
-        }
-      }
-      setSelectedPaths(new Set())
-      await refresh()
-      if (failures.length) {
-        setBulkUploadFeedback({
-          title: 'Envio em lote',
-          body: `Concluído com falhas (${failures.length}).`,
-          lines: failures.slice(0, 8),
-        })
-      }
-    } finally {
-      setBulkUploadBusy(false)
+  const playLocalOnSystem = async (clip) => {
+    if (!clip?.path || selectionMode) return
+    const r = await openPathElectron(clip.path)
+    if (!r?.ok) {
+      setTrashFeedback({
+        title: 'Não foi possível abrir o vídeo',
+        body: r?.error || 'Falha ao abrir no player padrão do sistema.',
+      })
+    }
+  }
+
+  const revealClipInFolder = async (clip) => {
+    if (!clip?.path) return
+    const r = await showItemInFolderElectron(clip.path)
+    if (!r?.ok) {
+      setTrashFeedback({
+        title: 'Não foi possível abrir a pasta',
+        body: r?.error || 'Falha ao abrir localização do arquivo.',
+      })
     }
   }
 
@@ -214,22 +228,12 @@ function Local() {
         </p>
       </ConfirmModal>
 
-      <ConfirmModal
-        open={bulkUploadConfirm}
-        titleId="local-bulk-upload-title"
-        title="Enviar para o YouTube?"
-        confirmLabel={`Enviar ${selectedCount} arquivo(s)`}
-        cancelLabel="Cancelar"
-        confirmVariant="primary"
-        busy={bulkUploadBusy}
-        onClose={() => !bulkUploadBusy && setBulkUploadConfirm(false)}
-        onConfirm={runBulkUpload}
-      >
-        <p className="text-kamui-white/90">
-          Os arquivos selecionados serão enviados para o seu canal. Após cada envio bem-sucedido, o Kamui
-          remove o arquivo local automaticamente.
-        </p>
-      </ConfirmModal>
+      <ManualUploadModal
+        open={uploadPaths != null && uploadPaths.length > 0}
+        paths={uploadPaths || []}
+        onClose={() => setUploadPaths(null)}
+        onComplete={handleUploadComplete}
+      />
 
       <ConfirmModal
         open={bulkUploadFeedback != null}
@@ -275,19 +279,6 @@ function Local() {
         )}
       </ConfirmModal>
 
-      <ConfirmModal
-        open={uploadError != null}
-        titleId="local-upload-error-title"
-        title="Envio para o YouTube"
-        confirmLabel="OK"
-        cancelLabel={null}
-        confirmVariant="primary"
-        onClose={() => setUploadError(null)}
-        onConfirm={() => setUploadError(null)}
-      >
-        <p className="text-kamui-white/90">{uploadError}</p>
-      </ConfirmModal>
-
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-kamui-white flex items-center gap-3">
@@ -301,8 +292,13 @@ function Local() {
             <RefreshCw size={16} />
             Atualizar
           </Button>
-          <Button variant="outline" size="sm" type="button" onClick={() => navigate('/settings')}>
-            Pasta
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            onClick={() => navigate('/settings', { state: { section: 'storage' } })}
+          >
+            Gerenciar
           </Button>
         </div>
       </div>
@@ -426,9 +422,7 @@ function Local() {
                 variant="primary"
                 size="sm"
                 type="button"
-                disabled={bulkUploadBusy || uploadBusy}
-                loading={bulkUploadBusy}
-                onClick={() => setBulkUploadConfirm(true)}
+                onClick={() => openUploadModal(Array.from(selectedPaths))}
               >
                 <Upload size={14} />
                 Enviar selecionados ({selectedCount})
@@ -451,7 +445,14 @@ function Local() {
             return (
               <Card key={clip.path} className="overflow-hidden p-0">
                 <div className="relative">
-                  <LocalVideoThumb videoPath={clip.path} />
+                  <button
+                    type="button"
+                    className="block w-full text-left"
+                    onClick={() => playLocalOnSystem(clip)}
+                    aria-label={`Abrir arquivo ${clip.name}`}
+                  >
+                    <LocalVideoThumb videoPath={clip.path} />
+                  </button>
                   {selectionMode && (
                     <div className="absolute left-2 top-2 z-20 rounded-md bg-black/65 p-1 backdrop-blur-sm">
                       <SelectionCheckbox
@@ -471,7 +472,18 @@ function Local() {
                   )}
                 </div>
                 <div className="p-4">
-                  <h3 className="mb-2 line-clamp-2 font-medium text-kamui-white">{clip.name}</h3>
+                  <button
+                    type="button"
+                    className="mb-2 line-clamp-2 text-left font-medium text-kamui-white hover:text-kamui-red transition-colors"
+                    onClick={() => playLocalOnSystem(clip)}
+                    aria-label={`Abrir arquivo ${clip.name}`}
+                  >
+                    {clip.name}
+                  </button>
+                  <div className="mb-2 flex max-w-full items-center gap-1 text-[11px] text-kamui-white-muted/80">
+                    <Folder size={12} className="shrink-0 opacity-70" />
+                    <span className="truncate">{folderBadgeLabel(clip.path)}</span>
+                  </div>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="text-xs text-kamui-white-muted">
                       <span>{formatBytes(clip.size || 0)}</span>
@@ -484,12 +496,21 @@ function Local() {
                         size="sm"
                         variant="primary"
                         type="button"
-                        disabled={uploadBusy}
-                        loading={uploadBusy && uploadPath === clip.path}
-                        onClick={() => uploadOne(clip.path)}
+                        disabled={uploadPaths != null}
+                        onClick={() => openUploadModal([clip.path])}
                       >
                         <Upload size={14} />
                         Enviar
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        type="button"
+                        onClick={() => revealClipInFolder(clip)}
+                        aria-label={`Ver ${clip.name} na pasta`}
+                      >
+                        <FolderSearch size={14} />
+                        Ver na pasta
                       </Button>
                       <Button
                         size="sm"
@@ -537,10 +558,28 @@ function Local() {
                     <span className="w-5 shrink-0" aria-hidden />
                   )}
                   <div className="w-40 flex-shrink-0">
-                    <LocalVideoThumb videoPath={clip.path} />
+                    <button
+                      type="button"
+                      className="block w-full text-left"
+                      onClick={() => playLocalOnSystem(clip)}
+                      aria-label={`Abrir arquivo ${clip.name}`}
+                    >
+                      <LocalVideoThumb videoPath={clip.path} />
+                    </button>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-medium text-kamui-white truncate">{clip.name}</h3>
+                    <button
+                      type="button"
+                      className="font-medium text-kamui-white truncate hover:text-kamui-red transition-colors"
+                      onClick={() => playLocalOnSystem(clip)}
+                      aria-label={`Abrir arquivo ${clip.name}`}
+                    >
+                      {clip.name}
+                    </button>
+                    <div className="mt-1 flex max-w-full items-center gap-1 text-[11px] text-kamui-white-muted/80">
+                      <Folder size={12} className="shrink-0 opacity-70" />
+                      <span className="truncate">{folderBadgeLabel(clip.path)}</span>
+                    </div>
                     <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-kamui-white-muted">
                       <span>{formatBytes(clip.size || 0)}</span>
                       {clip.modified && <span>{timeAgo(clip.modified)}</span>}
@@ -550,12 +589,21 @@ function Local() {
                     size="sm"
                     variant="primary"
                     type="button"
-                    disabled={uploadBusy}
-                    loading={uploadBusy && uploadPath === clip.path}
-                    onClick={() => uploadOne(clip.path)}
+                    disabled={uploadPaths != null}
+                    onClick={() => openUploadModal([clip.path])}
                   >
                     <Upload size={14} />
                     Enviar
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    type="button"
+                    onClick={() => revealClipInFolder(clip)}
+                    aria-label={`Ver ${clip.name} na pasta`}
+                  >
+                    <FolderSearch size={14} />
+                    Ver na pasta
                   </Button>
                   <Button
                     size="sm"

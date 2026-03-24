@@ -11,15 +11,19 @@ import {
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
+    const byKey = Object.fromEntries(payload.map((p) => [p.dataKey, p.value]))
     return (
       <div className="glass-card rounded-lg p-3 border border-white/10">
         <p className="text-sm font-medium text-kamui-white mb-2">{label}</p>
         <div className="space-y-1">
           <p className="text-xs text-kamui-red-light">
-            Uploads: {payload[0]?.value ?? 0}
+            Uploads (YouTube): {byKey.uploads ?? 0}
+          </p>
+          <p className="text-xs text-amber-300">
+            Exclusoes (YouTube): {byKey.youtubeDeleted ?? 0}
           </p>
           <p className="text-xs text-kamui-white-muted">
-            Views (canal): {payload[1]?.value?.toLocaleString?.() ?? payload[1]?.value ?? 0}
+            Exclusoes (local): {byKey.localDeleted ?? 0}
           </p>
         </div>
       </div>
@@ -39,8 +43,9 @@ function ActivityChart({ data = [] }) {
 
   const chartData = data.map((d) => ({
     name: d.name,
-    uploads: d.uploads ?? 0,
-    views: d.views ?? 0,
+    uploads: d.uploads_youtube ?? d.uploads ?? 0,
+    youtubeDeleted: d.youtube_deleted ?? 0,
+    localDeleted: d.local_deleted ?? 0,
   }))
 
   return (
@@ -55,9 +60,13 @@ function ActivityChart({ data = [] }) {
               <stop offset="5%" stopColor="#c41e3a" stopOpacity={0.4} />
               <stop offset="95%" stopColor="#c41e3a" stopOpacity={0} />
             </linearGradient>
-            <linearGradient id="colorViews" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#3a3a3a" stopOpacity={0.4} />
-              <stop offset="95%" stopColor="#3a3a3a" stopOpacity={0} />
+            <linearGradient id="colorDeletedYoutube" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.35} />
+              <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+            </linearGradient>
+            <linearGradient id="colorDeletedLocal" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#7b8292" stopOpacity={0.2} />
+              <stop offset="95%" stopColor="#7b8292" stopOpacity={0} />
             </linearGradient>
           </defs>
           <CartesianGrid
@@ -89,11 +98,19 @@ function ActivityChart({ data = [] }) {
           />
           <Area
             type="monotone"
-            dataKey="views"
-            stroke="#3a3a3a"
+            dataKey="youtubeDeleted"
+            stroke="#f59e0b"
             strokeWidth={2}
             fillOpacity={1}
-            fill="url(#colorViews)"
+            fill="url(#colorDeletedYoutube)"
+          />
+          <Area
+            type="monotone"
+            dataKey="localDeleted"
+            stroke="#7b8292"
+            strokeWidth={2}
+            fillOpacity={1}
+            fill="url(#colorDeletedLocal)"
           />
         </AreaChart>
       </ResponsiveContainer>

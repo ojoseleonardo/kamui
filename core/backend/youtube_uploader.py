@@ -2,6 +2,7 @@
 Uploader para YouTube — API Data v3, OAuth2.
 """
 
+import io
 import json
 import pickle
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Optional, Dict, List, Callable
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 
@@ -151,7 +152,7 @@ class YouTubeUploader:
             if "created" in metadata:
                 description += f"Data de criação: {metadata['created']}\n"
 
-        description += "\nUpload automático via Kamui"
+        description += "\nUpload via Kamui"
         return description
 
     def _generate_tags(self, file_path: str, metadata: Optional[Dict] = None) -> List[str]:
@@ -161,7 +162,7 @@ class YouTubeUploader:
         words = file_name.replace("_", " ").replace("-", " ").split()
         tags.extend([w for w in words if len(w) > 2][:5])
 
-        tags.extend(["kamui", "upload automático"])
+        tags.extend(["kamui", "clip"])
 
         extension = Path(file_path).suffix.lower()
         if extension:
@@ -210,18 +211,19 @@ class YouTubeUploader:
         title: Optional[str] = None,
         description: Optional[str] = None,
         tags: Optional[List[str]] = None,
-        privacy_status: str = "private",
+        privacy_status: str = "unlisted",
         progress_callback: Optional[Callable[[float], None]] = None,
         metadata: Optional[Dict] = None,
-    ) -> Optional[str]:
+    ) -> tuple[Optional[str], str]:
+        """Retorna (youtube_id, mensagem). Em sucesso, mensagem é ''."""
         if not self.youtube_service:
             self.logger.error("Serviço do YouTube não está disponível.")
-            return None
+            return None, "YouTube não está autenticado. Use OAuth em Configurações."
 
         file_path_obj = Path(file_path)
         if not file_path_obj.exists():
             self.logger.error(f"Arquivo não encontrado: {file_path}")
-            return None
+            return None, "Arquivo não encontrado."
 
         if not title:
             title = self._generate_title(file_path)
@@ -231,8 +233,8 @@ class YouTubeUploader:
             tags = self._generate_tags(file_path, metadata)
 
         if privacy_status not in ["public", "unlisted", "private"]:
-            self.logger.warning(f"Status de privacidade inválido: {privacy_status}. Usando 'private'")
-            privacy_status = "private"
+            self.logger.warning(f"Status de privacidade inválido: {privacy_status}. Usando 'unlisted'")
+            privacy_status = "unlisted"
 
         try:
             self.logger.info(f"Iniciando upload: {file_path}")
@@ -263,6 +265,7 @@ class YouTubeUploader:
             response = None
             retry_count = 0
             max_retries = 3
+            last_err = ""
 
             while response is None:
                 try:
@@ -273,17 +276,35 @@ class YouTubeUploader:
                         if progress_callback:
                             progress_callback(progress)
                 except Exception as e:
+                    last_err = (
+                        self._google_api_user_message(e)
+                        if isinstance(e, HttpError)
+                        else str(e)
+                    )
                     reasons = self._youtube_error_reasons(e)
-                    if "uploadLimitExceeded" in reasons or "quotaExceeded" in reasons:
+                    if "uploadLimitExceeded" in reasons:
                         self.logger.error(
-                            "YouTube recusou o upload (limite ou quota). Não será repetido: %s",
+                            "YouTube recusou o upload (limite diário do canal). Não será repetido: %s",
                             e,
                         )
-                        return None
+                        return None, (
+                            "O YouTube bloqueou novos uploads neste canal: limite diário de vídeos "
+                            "atingido (não é a cota da API no Google Cloud). Costuma libertar após ~24h; "
+                            "se um bug enviou muitos vídeos de uma vez, espera ou apaga rascunhos no Studio."
+                        )
+                    if "quotaExceeded" in reasons:
+                        self.logger.error(
+                            "YouTube recusou o upload (quota da API). Não será repetido: %s",
+                            e,
+                        )
+                        return None, (
+                            "Quota da API do YouTube no Google Cloud esgotada para hoje. "
+                            "Confirme em APIs e serviços → Quotas ou tente após o reset diário (PT)."
+                        )
                     retry_count += 1
                     if retry_count > max_retries:
                         self.logger.error(f"Erro no upload após {max_retries} tentativas: {e}")
-                        return None
+                        return None, last_err or "Falha ao enviar após várias tentativas."
                     self.logger.warning(f"Erro no upload (tentativa {retry_count}/{max_retries}): {e}")
                     continue
 
@@ -292,14 +313,49 @@ class YouTubeUploader:
                 self.logger.info(f"Upload concluído! ID: {youtube_video_id}")
                 if progress_callback:
                     progress_callback(100.0)
-                return youtube_video_id
+                return youtube_video_id, ""
 
             self.logger.error(f"Upload sem ID de vídeo: {response}")
-            return None
+            return None, "A API não devolveu o ID do vídeo."
 
         except Exception as e:
             self.logger.error(f"Erro durante upload: {str(e)}")
-            return None
+            msg = (
+                self._google_api_user_message(e)
+                if isinstance(e, HttpError)
+                else str(e)
+            )
+            return None, msg or "Erro desconhecido durante o upload."
+
+    def set_thumbnail(self, video_id: str, image_bytes: bytes, mimetype: str) -> tuple[bool, str]:
+        """Define miniatura customizada (thumbnails.set)."""
+        if not self.youtube_service:
+            return False, "YouTube não está autenticado."
+        vid = (video_id or "").strip()
+        if not vid:
+            return False, "ID de vídeo inválido."
+        mt = (mimetype or "image/jpeg").split(";")[0].strip().lower()
+        if mt not in ("image/jpeg", "image/jpg", "image/png"):
+            return False, "Use JPEG ou PNG para a miniatura."
+        if len(image_bytes) > 2 * 1024 * 1024:
+            return False, "Imagem demasiado grande (máx. 2 MB)."
+        try:
+            media = MediaIoBaseUpload(
+                io.BytesIO(image_bytes),
+                mimetype=mt if mt != "image/jpg" else "image/jpeg",
+                resumable=False,
+            )
+            acquire_google_youtube_slot()
+            self.youtube_service.thumbnails().set(videoId=vid, media_body=media).execute()
+            self.logger.info("Miniatura definida para o vídeo %s", vid)
+            return True, ""
+        except HttpError as e:
+            msg = self._google_api_user_message(e)
+            self.logger.warning("Falha ao definir miniatura %s: %s", vid, msg)
+            return False, msg
+        except Exception as e:
+            self.logger.error("Erro ao definir miniatura %s: %s", vid, e)
+            return False, str(e)
 
     def get_video_info(self, youtube_video_id: str) -> Optional[Dict]:
         if not self.youtube_service:

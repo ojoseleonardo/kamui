@@ -20,13 +20,12 @@ def _default_folder() -> str:
     return str(Path.cwd().resolve())
 
 
-def _vm(folder: str, auto_upload: bool = False, privacy: str = "private") -> VideoManager:
+def _vm(folder: str, privacy: str = "unlisted") -> VideoManager:
     return VideoManager(
         watch_folder=folder,
         credentials_file=str(client_secrets_path()),
         token_file=str(token_path()),
         log_dir=str(logs_dir()),
-        auto_upload=auto_upload,
         privacy_status=privacy,
     )
 
@@ -53,11 +52,7 @@ def cmd_stats(args):
 
 def cmd_watch(args):
     setup_logging(log_dir=str(logs_dir()), log_level=LoggerConfig.INFO)
-    manager = _vm(
-        args.folder,
-        auto_upload=args.auto_upload,
-        privacy=args.privacy,
-    )
+    manager = _vm(args.folder, privacy=args.privacy)
 
     def signal_handler(sig, frame):
         manager.stop()
@@ -75,9 +70,9 @@ def cmd_watch(args):
 
 def cmd_upload(args):
     setup_logging(log_dir=str(logs_dir()), log_level=LoggerConfig.INFO)
-    manager = _vm(args.folder, auto_upload=False)
-    privacy = args.privacy or "private"
-    youtube_id = manager.upload_video_manually(
+    manager = _vm(args.folder)
+    privacy = args.privacy or "unlisted"
+    youtube_id, err = manager.upload_video_manually(
         file_path=args.path,
         title=args.title,
         description=args.description,
@@ -87,7 +82,7 @@ def cmd_upload(args):
     if youtube_id:
         print(f"Upload concluído! YouTube ID: {youtube_id}")
     else:
-        print("Erro ao fazer upload do vídeo.")
+        print(err or "Erro ao fazer upload do vídeo.")
         sys.exit(1)
 
 
@@ -109,12 +104,11 @@ def main():
     p_stats = sub.add_parser("stats", help="Estatísticas")
     p_stats.set_defaults(func=cmd_stats)
 
-    p_watch = sub.add_parser("watch", help="Monitorar pasta")
-    p_watch.add_argument("--auto-upload", action="store_true")
+    p_watch = sub.add_parser("watch", help="Monitorar pasta (sem upload automático)")
     p_watch.add_argument(
         "--privacy",
         choices=["public", "unlisted", "private"],
-        default="private",
+        default="unlisted",
     )
     p_watch.set_defaults(func=cmd_watch)
 
@@ -126,7 +120,7 @@ def main():
     p_up.add_argument(
         "--privacy",
         choices=["public", "unlisted", "private"],
-        default="private",
+        default="unlisted",
     )
     p_up.set_defaults(func=cmd_upload)
 

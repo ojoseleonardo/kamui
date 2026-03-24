@@ -31,12 +31,17 @@ def resolve_watch_video_path(file_path: str) -> Optional[Path]:
     return p
 
 
-def extract_thumbnail_jpeg(video_path: str, max_width: int = 400) -> Optional[bytes]:
+def extract_thumbnail_jpeg(
+    video_path: str,
+    max_width: int = 400,
+    seek_ms: int = 800,
+) -> Optional[bytes]:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return None
     try:
-        cap.set(cv2.CAP_PROP_POS_MSEC, 800)
+        seek = max(0, int(seek_ms))
+        cap.set(cv2.CAP_PROP_POS_MSEC, float(seek))
         ok, frame = cap.read()
         if not ok or frame is None:
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)

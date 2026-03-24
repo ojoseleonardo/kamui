@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import {
   Settings as SettingsIcon,
   Youtube,
@@ -16,7 +17,7 @@ import { formatBytes } from '@/lib/utils'
 import { useFolderSummary } from '@/hooks/useFolderSummary'
 import KamuiLoader from '@/components/ui/KamuiLoader'
 
-function YoutubeAccountPanel({ settings, updateSetting, showError }) {
+function YoutubeAccountPanel({ showError }) {
   const { youtubeConnected, youtubeMessage, refresh } = useBackendStatus()
   const [busy, setBusy] = useState(false)
   const [disconnectBusy, setDisconnectBusy] = useState(false)
@@ -88,40 +89,6 @@ function YoutubeAccountPanel({ settings, updateSetting, showError }) {
         use &quot;Desconectar&quot; e depois &quot;Conectar&quot;, ou abra o link do Google numa
         janela anónima.
       </p>
-
-      <div className="space-y-2">
-        <label className="font-medium text-kamui-white">Privacidade padrão</label>
-        <select
-          value={settings.defaultPrivacy}
-          onChange={(e) => updateSetting('defaultPrivacy', e.target.value)}
-          className="w-full bg-kamui-gray border border-white/10 rounded-lg px-4 py-2.5 text-sm text-kamui-white focus:outline-none focus:border-kamui-red/50"
-        >
-          <option value="public">Público</option>
-          <option value="unlisted">Não listado</option>
-          <option value="private">Privado</option>
-        </select>
-      </div>
-
-      <div className="space-y-2">
-        <label className="font-medium text-kamui-white">Tags padrão</label>
-        <input
-          type="text"
-          value={settings.defaultTags}
-          onChange={(e) => updateSetting('defaultTags', e.target.value)}
-          placeholder="gaming, clips"
-          className="w-full bg-kamui-gray border border-white/10 rounded-lg px-4 py-2.5 text-sm text-kamui-white placeholder:text-kamui-white-muted focus:outline-none focus:border-kamui-red/50"
-        />
-      </div>
-
-      <div className="space-y-2">
-        <label className="font-medium text-kamui-white">Descrição padrão</label>
-        <textarea
-          value={settings.defaultDescription}
-          onChange={(e) => updateSetting('defaultDescription', e.target.value)}
-          rows={3}
-          className="w-full bg-kamui-gray border border-white/10 rounded-lg px-4 py-2.5 text-sm text-kamui-white placeholder:text-kamui-white-muted focus:outline-none focus:border-kamui-red/50 resize-none"
-        />
-      </div>
 
       <Button
         variant="outline"
@@ -206,15 +173,11 @@ function StorageSection({ settings, updateSetting, showError }) {
 }
 
 function Settings() {
+  const location = useLocation()
   const [saveBusy, setSaveBusy] = useState(false)
   const [loadBusy, setLoadBusy] = useState(true)
   const [settings, setSettings] = useState({
-    autoUpload: true,
-    deleteAfterUpload: false,
-    generateThumbnail: true,
-    defaultPrivacy: 'private',
-    defaultTags: '',
-    defaultDescription: '',
+    deleteAfterUpload: true,
     monitorPath: '',
     maxFileSize: 2048,
     videoQuality: 'original',
@@ -240,14 +203,9 @@ function Settings() {
         if (!alive) return
         setSettings((s) => ({
           ...s,
-          autoUpload: prefs.auto_upload !== false,
-          defaultPrivacy: prefs.default_privacy || 'private',
-          deleteAfterUpload: !!prefs.delete_after_upload,
-          generateThumbnail: prefs.generate_thumbnail !== false,
+          deleteAfterUpload: prefs.delete_after_upload !== false,
           videoQuality: prefs.video_quality || 'original',
           maxFileSize: Number(prefs.max_file_size_mb) || 2048,
-          defaultTags: typeof prefs.default_tags === 'string' ? prefs.default_tags : '',
-          defaultDescription: typeof prefs.default_description === 'string' ? prefs.default_description : '',
           monitorPath: setup.watch_folder || '',
         }))
       } catch (_) {
@@ -295,14 +253,9 @@ function Settings() {
       await saveWatchFolderIfNeeded()
       await apiPut('/settings/preferences', {
         preferences: {
-          auto_upload: settings.autoUpload,
-          default_privacy: settings.defaultPrivacy,
           delete_after_upload: settings.deleteAfterUpload,
-          generate_thumbnail: settings.generateThumbnail,
           video_quality: settings.videoQuality,
           max_file_size_mb: settings.maxFileSize,
-          default_tags: settings.defaultTags,
-          default_description: settings.defaultDescription,
         },
       })
       await apiPost('/settings/reload')
@@ -322,32 +275,12 @@ function Settings() {
         <div className="space-y-6">
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium text-kamui-white">Upload automático</p>
-              <p className="text-sm text-kamui-white-muted">Enviar ao detetar novo ficheiro</p>
-            </div>
-            <ToggleSwitch
-              enabled={settings.autoUpload}
-              onChange={(v) => updateSetting('autoUpload', v)}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <div>
               <p className="font-medium text-kamui-white">Excluir após upload</p>
-              <p className="text-sm text-kamui-white-muted">Ainda não aplicado no backend</p>
+              <p className="text-sm text-kamui-white-muted">Apaga o arquivo local após envio bem-sucedido</p>
             </div>
             <ToggleSwitch
               enabled={settings.deleteAfterUpload}
               onChange={(v) => updateSetting('deleteAfterUpload', v)}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-medium text-kamui-white">Gerar thumbnail</p>
-              <p className="text-sm text-kamui-white-muted">Reservado para futuras versões</p>
-            </div>
-            <ToggleSwitch
-              enabled={settings.generateThumbnail}
-              onChange={(v) => updateSetting('generateThumbnail', v)}
             />
           </div>
           <div className="space-y-2">
@@ -379,7 +312,7 @@ function Settings() {
       id: 'youtube',
       title: 'YouTube',
       icon: Youtube,
-      content: <YoutubeAccountPanel settings={settings} updateSetting={updateSetting} showError={showError} />,
+      content: <YoutubeAccountPanel showError={showError} />,
     },
     {
       id: 'storage',
@@ -390,6 +323,13 @@ function Settings() {
   ]
 
   const [activeSection, setActiveSection] = useState('upload')
+
+  useEffect(() => {
+    const section = location.state?.section
+    if (section === 'upload' || section === 'youtube' || section === 'storage') {
+      setActiveSection(section)
+    }
+  }, [location.state])
 
   if (loadBusy) {
     return (

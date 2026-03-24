@@ -25,6 +25,7 @@ import { Card, Button, Badge, SelectMenuButton, SelectionCheckbox, ConfirmModal 
 import KamuiLoader from '@/components/ui/KamuiLoader'
 import VideoEditModal from '@/components/youtube/VideoEditModal'
 import { formatNumber, formatDuration, timeAgo } from '@/lib/utils'
+import ManualUploadModal from '@/components/upload/ManualUploadModal'
 import { apiPostJson, selectVideoFileElectron } from '@/lib/api'
 import { useYoutubeVideos } from '@/hooks/useYoutubeVideos'
 
@@ -59,7 +60,8 @@ function YouTube() {
   const [viewMode, setViewMode] = useState('grid')
   const [searchQuery, setSearchQuery] = useState('')
   const [filterPrivacy, setFilterPrivacy] = useState('all')
-  const [uploadBusy, setUploadBusy] = useState(false)
+  const [uploadPickerBusy, setUploadPickerBusy] = useState(false)
+  const [uploadModalPaths, setUploadModalPaths] = useState(null)
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [deleteBusy, setDeleteBusy] = useState(false)
@@ -99,18 +101,27 @@ function YouTube() {
   const totalComments = filteredVideos.reduce((s, v) => s + (v.comments || 0), 0)
 
   const manualUpload = async () => {
-    if (uploadBusy) return
-    setUploadBusy(true)
-    let path = null
+    if (uploadPickerBusy) return
+    setUploadPickerBusy(true)
     try {
-      path = await selectVideoFileElectron()
-      if (!path) return
-      await apiPostJson('/uploads/manual', { path })
-      await refresh()
-    } catch (e) {
-      setNoticeModal({ title: 'Upload manual', body: e.message || String(e) })
+      const path = await selectVideoFileElectron()
+      if (path) setUploadModalPaths([path])
     } finally {
-      setUploadBusy(false)
+      setUploadPickerBusy(false)
+    }
+  }
+
+  const handleManualUploadComplete = async ({ failures, attempted }) => {
+    await refresh()
+    if (failures?.length) {
+      const lines = failures.slice(0, 6).map((f) => f.message)
+      setNoticeModal({
+        title: 'Upload manual',
+        body:
+          failures.length >= attempted
+            ? lines[0] || 'Falha no envio.'
+            : `Alguns envios falharam (${failures.length}/${attempted}).`,
+      })
     }
   }
 
@@ -314,6 +325,13 @@ function YouTube() {
         )}
       </ConfirmModal>
 
+      <ManualUploadModal
+        open={uploadModalPaths != null && uploadModalPaths.length > 0}
+        paths={uploadModalPaths || []}
+        onClose={() => setUploadModalPaths(null)}
+        onComplete={handleManualUploadComplete}
+      />
+
       <ConfirmModal
         open={bulkPrivacyModal != null}
         titleId="youtube-bulk-privacy-title"
@@ -378,8 +396,8 @@ function YouTube() {
             size="sm"
             type="button"
             onClick={manualUpload}
-            disabled={uploadBusy}
-            loading={uploadBusy}
+            disabled={uploadPickerBusy}
+            loading={uploadPickerBusy}
           >
             <Upload size={16} />
             Upload manual

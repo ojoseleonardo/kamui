@@ -6,7 +6,11 @@ import { timeAgo } from '@/lib/utils'
 import { useEvents } from '@/hooks/useEvents'
 
 function RecentClips() {
-  const { events, error, loading } = useEvents({ limit: 6, type: 'upload_success' })
+  const { events, error, loading } = useEvents({
+    limit: 6,
+    type: 'upload_success',
+    reconcileUploads: true,
+  })
 
   return (
     <Card>
